@@ -229,8 +229,8 @@ static void testThreeDevices() {
 // Devices running another game, or another version of the same game, ignore each other and stay unnoticed.
 static void testOtherGameIgnored() {
     const arcade::GameInfo otherGame = {"other", 9, 1, sizeof(ThrowhallaGame), 0, kThrowhallaInfo.create, 2};
-    const arcade::GameInfo otherVersion = {"throwhalla", 1, 2, sizeof(ThrowhallaGame), 0, kThrowhallaInfo.create, 2};
-    const arcade::GameInfo otherPlayers = {"throwhalla", 1, 1, sizeof(ThrowhallaGame), 0, kThrowhallaInfo.create, 4};
+    const arcade::GameInfo otherVersion = {"throwhalla", 1, uint8_t(kThrowhallaInfo.protoVer + 1), sizeof(ThrowhallaGame), 0, kThrowhallaInfo.create, 2};
+    const arcade::GameInfo otherPlayers = {"throwhalla", 1, kThrowhallaInfo.protoVer, sizeof(ThrowhallaGame), 0, kThrowhallaInfo.create, 4};
     for (const arcade::GameInfo* other : {&otherGame, &otherVersion, &otherPlayers}) {
         Link l;
         Endpoint& a = l.add(kClient);
@@ -295,6 +295,8 @@ static void expectViewMatches(Endpoint& h, Endpoint& c, int& mismatches) {
         const Player& a = g.players[i];
         const Player& b = v.players[i];
         ok = ok && a.score == b.score && a.item == b.item && a.itemUsed == b.itemUsed && a.hit == b.hit &&
+             a.hitSources == b.hitSources && a.hitSerial == b.hitSerial &&
+             std::fabs(a.hitFlash - b.hitFlash) < 0.01f &&
              a.charging == b.charging && a.face == b.face && std::fabs(a.h - b.h) < 0.1f &&
              std::fabs(a.feetY - b.feetY) < 0.2f && std::fabs(a.power - b.power) < 0.01f;
         ok = ok && std::fabs(g.platformY(i) - v.platformY(i)) < 0.01f;

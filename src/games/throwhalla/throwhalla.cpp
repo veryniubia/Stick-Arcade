@@ -89,6 +89,8 @@ void ThrowhallaGame::encode(Writer& w) const {
         w.u8(q8(p.hitFlash, 255.0f));
         w.u8(q8(p.cooldown, 255.0f));
         w.u8(p.score);
+        w.u8(p.hitSources);
+        w.u8(p.hitSerial);
         w.u8(static_cast<uint8_t>(p.item));
         uint8_t pf = 0;
         if (p.itemUsed) pf |= kPlItemUsed;
@@ -129,7 +131,7 @@ bool ThrowhallaGame::decode(Reader& r) {
 
     struct PlayerWire {
         int16_t h, vh, aim;
-        uint8_t power, hitFlash, cooldown, score, item, flags;
+        uint8_t power, hitFlash, cooldown, score, hitSources, hitSerial, item, flags;
     } pw[2];
     for (auto& p : pw) {
         p.h = r.i16();
@@ -139,6 +141,8 @@ bool ThrowhallaGame::decode(Reader& r) {
         p.hitFlash = r.u8();
         p.cooldown = r.u8();
         p.score = r.u8();
+        p.hitSources = r.u8();
+        p.hitSerial = r.u8();
         p.item = r.u8();
         p.flags = r.u8();
     }
@@ -180,6 +184,8 @@ bool ThrowhallaGame::decode(Reader& r) {
         p.hitFlash = w.hitFlash / 255.0f;
         p.cooldown = w.cooldown / 255.0f;
         p.score = w.score;
+        p.hitSources = w.hitSources;
+        p.hitSerial = w.hitSerial;
         p.item = static_cast<ItemType>(w.item <= static_cast<uint8_t>(ItemType::Boomerang) ? w.item : 0);
         p.itemUsed = (w.flags & kPlItemUsed) != 0;
         p.charging = (w.flags & kPlCharging) != 0;
@@ -212,6 +218,49 @@ bool ThrowhallaGame::decode(Reader& r) {
 
 #ifdef DEBUG_REMOTE
 bool ThrowhallaGame::debugKey(char key) {
+    // Reproducible hardware checks; the host's resulting state is sent through normal snapshots.
+    if (key == 'h' || key == 'H' || key == 't' || key == 'c' || key == 'w') {
+        if (key == 't' || key == 'c' || key == 'w') {
+            for (auto& p : g_.proj) p = Projectile();
+            g_.phase = Phase::Playing;
+            g_.winner = -1;
+            g_.turnTimer = 0;
+            for (auto& p : g_.players) {
+                p.hit = false;
+                p.hitSources = 0;
+                p.hitFlash = 0;
+                p.score = key == 't' ? 4 : 0;
+                p.itemUsed = false;
+            }
+            if (key == 'w') g_.players[0].score = 4;
+        }
+        if (key == 'c') {
+            for (int i = 0; i < 2; ++i) {
+                Projectile& p = g_.proj[i];
+                p.active = true;
+                p.type = ItemType::Knife;
+                p.owner = i;
+                p.x = i ? 126 : 114;
+                p.y = 12;
+                p.vx = i ? -360 : 360;
+            }
+        } else {
+            const int count = key == 't' ? 2 : 1;
+            for (int i = 0; i < count; ++i) {
+                const int victim = key == 't' ? i : (key == 'w' ? 1 : 0);
+                Projectile& p = g_.proj[key == 'H' ? 1 : i];
+                p = Projectile();
+                p.active = true;
+                p.type = ItemType::Bomb;
+                p.owner = key == 't' ? 1 - i : (key == 'H' ? 1 : 0);
+                p.x = g_.players[victim].x;
+                p.y = g_.players[victim].feetY - 8;
+                p.exploding = true;
+                p.blastT = cfg::BOMB_BLAST_SEC;
+            }
+        }
+        return true;
+    }
     if (key >= '1' && key <= '4') {
         g_.players[0].item = static_cast<ItemType>(key - '0');
         return true;
@@ -231,4 +280,4 @@ arcade::IGame* create(void* mem, arcade::Arena&) { return new (mem) ThrowhallaGa
 
 }  // namespace
 
-const arcade::GameInfo kThrowhallaInfo = {"throwhalla", 1, 1, sizeof(ThrowhallaGame), 0, create, 2};
+const arcade::GameInfo kThrowhallaInfo = {"throwhalla", 1, 2, sizeof(ThrowhallaGame), 0, create, 2};

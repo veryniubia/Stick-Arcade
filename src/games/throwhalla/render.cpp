@@ -357,18 +357,34 @@ void drawTurnBar(const Game& g, int local) {
 }
 
 void drawBanner(const Game& g, int local) {
+    const bool meHit = g.players[local].hitFlash > 1.0f - cfg::HIT_NOTICE_SEC;
+    const bool oppHit = g.players[1 - local].hitFlash > 1.0f - cfg::HIT_NOTICE_SEC;
+    if (g.phase != Phase::MatchEnd && (meHit || oppHit)) {
+        canvas.setTextDatum(middle_center);
+        canvas.setTextSize(3);
+        if (meHit) {
+            canvas.setTextColor(rgb(0, 0, 0));
+            canvas.drawString("OUCH!", cfg::SCREEN_W / 2 + 2, 42);
+            canvas.setTextColor(rgb(255, 90, 80));
+            canvas.drawString("OUCH!", cfg::SCREEN_W / 2, 40);
+        }
+        if (oppHit) {
+            const int y = meHit ? 64 : 40;
+            canvas.setTextColor(rgb(0, 0, 0));
+            canvas.drawString("HIT!", cfg::SCREEN_W / 2 + 2, y + 2);
+            canvas.setTextColor(kYellow);
+            canvas.drawString("HIT!", cfg::SCREEN_W / 2, y);
+        }
+        canvas.setTextSize(1);
+        return;
+    }
     const char* text = nullptr;
     uint16_t color = kYellow;
     if (g.phase == Phase::RoundEnd) {
-        const bool meHit = g.players[local].hit;
-        const bool oppHit = g.players[1 - local].hit;
-        if (meHit && oppHit) text = "BOTH!";
-        else if (meHit) { text = "OUCH!"; color = rgb(255, 90, 80); }
-        else if (oppHit) text = "HIT!";
-        else if (g.mode == GameMode::Solo) { text = "MISS"; color = rgb(190, 192, 200); }
+        if (g.mode == GameMode::Solo && !g.players[1].hit) { text = "MISS"; color = rgb(190, 192, 200); }
     } else if (g.phase == Phase::MatchEnd) {
         const bool won = g.winner == local;
-        text = won ? "YOU WIN" : "YOU LOSE";
+        text = g.isDraw() ? "DRAW" : (won ? "YOU WIN" : "YOU LOSE");
         color = won ? rgb(120, 255, 120) : rgb(255, 90, 80);
     }
     if (!text) return;
@@ -381,7 +397,7 @@ void drawBanner(const Game& g, int local) {
     canvas.setTextSize(1);
 }
 
-bool g_prevHit[2] = {false, false};
+uint8_t g_prevHit[2] = {};
 bool g_prevBlast[cfg::MAX_PROJ] = {};
 uint32_t g_lastMs = 0;
 uint32_t g_frame = 0;
@@ -389,11 +405,11 @@ uint32_t g_frame = 0;
 void spawnEffects(const Game& g, float dt) {
     ++g_frame;
     for (int i = 0; i < 2; ++i) {
-        if (g.players[i].hit && !g_prevHit[i]) {
+        if (g.players[i].hit && g.players[i].hitSerial != g_prevHit[i]) {
             const uint16_t cols[] = {kWhite, kYellow, rgb(255, 90, 60)};
             burstSparks(g.players[i].x, g.players[i].feetY - 8, 12, 90.0f, 0.45f, cols, 3);
         }
-        g_prevHit[i] = g.players[i].hit;
+        g_prevHit[i] = g.players[i].hitSerial;
     }
     for (int i = 0; i < cfg::MAX_PROJ; ++i) {
         const Projectile& p = g.proj[i];
@@ -500,7 +516,7 @@ void drawGame(const Game& g, int local) {
     spawnEffects(g, dt);
 
     const int loser = g.matchLoser();
-    if (loser < 0) g_fallT = 0.0f;
+    if (loser < 0 && !g.isDraw()) g_fallT = 0.0f;
     else g_fallT += dt;
 
     drawBackground();
@@ -518,7 +534,7 @@ void drawGame(const Game& g, int local) {
         const bool blink = p.hit && p.hitFlash > 0.0f && (static_cast<int>(p.hitFlash * 14.0f) & 1);
         // The arm angle is drawn relative to the way the viking is facing (it turns around past 90 degrees).
         const float arm = (i != local) ? -20.0f : (p.face == p.dir ? p.aimDeg : 180.0f - p.aimDeg);
-        if (i == loser) {
+        if (i == loser || g.isDraw()) {
             const float progress = g_fallT >= kFallSec ? 1.0f : g_fallT / kFallSec;
             drawFallenFigure(static_cast<int>(p.x), static_cast<int>(p.feetY), p.dir, p.face, i, progress);
         } else {

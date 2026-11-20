@@ -133,6 +133,7 @@ void Game::startRound(bool refresh) {
     for (auto& p : proj) p = Projectile();
     for (auto& p : players) {
         p.hit = false;
+        p.hitSources = 0;
         p.hitFlash = 0.0f;
         p.h = 0.0f;
         p.vh = 0.0f;
@@ -141,8 +142,11 @@ void Game::startRound(bool refresh) {
         p.cooldown = 0.0f;
     }
     if (refresh) refreshItems();
-    suddenDeath_ = mode == GameMode::Versus && players[0].score == cfg::WIN_SCORE - 1 &&
-                   players[1].score == cfg::WIN_SCORE - 1;
+}
+
+bool Game::isDraw() const {
+    return mode == GameMode::Versus && phase != Phase::Playing &&
+           players[0].score >= cfg::WIN_SCORE && players[1].score >= cfg::WIN_SCORE;
 }
 
 int Game::matchLoser() const {
@@ -205,7 +209,7 @@ void Game::updatePlayer(int idx, const PlayerInput& in, float dt) {
     p.aimDeg = clampf(in.aimDeg, cfg::AIM_MIN_DEG, cfg::AIM_MAX_DEG);
     if (p.aimDeg > cfg::AIM_FLIP_UP_DEG) p.face = -p.dir;
     else if (p.aimDeg < cfg::AIM_FLIP_DOWN_DEG) p.face = p.dir;
-    if (p.hitFlash > 0.0f) p.hitFlash -= dt;
+    p.hitFlash = clampf(p.hitFlash - dt, 0.0f, 1.0f);
     if (p.cooldown > 0.0f) p.cooldown -= dt;
 
     const bool grounded = p.h <= 0.0f && p.vh <= 0.0f;
@@ -257,7 +261,8 @@ void Game::checkHits(Projectile& p) {
     if (phase != Phase::Playing) return;  // damage after the round is settled does not count
     for (int i = 0; i < 2; ++i) {
         Player& pl = players[i];
-        if (pl.hit) continue;
+        const uint8_t source = static_cast<uint8_t>(1u << p.owner);
+        if (pl.hitSources & source) continue;
         if (p.type == ItemType::Bomb && !p.exploding) continue;  // a bomb only hurts through its blast
         if (!p.exploding && i == p.owner && p.life < cfg::OWNER_IMMUNE_SEC) continue;
 
@@ -268,7 +273,13 @@ void Game::checkHits(Projectile& p) {
             continue;
 
         pl.hit = true;
+        pl.hitSources |= source;
+        ++pl.hitSerial;
         pl.hitFlash = 1.0f;
+        if (mode == GameMode::Versus || i == 1) {
+            Player& scorer = players[1 - i];
+            if (mode == GameMode::Solo || scorer.score < cfg::WIN_SCORE) ++scorer.score;
+        }
         pl.charging = false;
         ev_ |= EV_HIT;
         if (!p.exploding) {
@@ -403,18 +414,8 @@ void Game::updateProjectile(Projectile& p, float dt) {
             return;
     }
 
-    if (collideWorld(p, r, spec.wallRest, spec.obstacleRest)) {
-        ev_ |= EV_BOUNCE;
-        if (p.type == ItemType::Bomb) {
-            if (!p.fuseOn) {
-                p.fuseOn = true;
-                p.fuse = cfg::BOMB_FUSE_SEC;
-            }
-        } else if (++p.bounces > cfg::MAX_BOUNCES) {
-            p.active = false;
-            return;
-        }
-    }
+    if (collideWorld(p, r, spec.wallRest, spec.obstacleRest)) registerBounce(p);
+    if (!p.active) return;
     if (p.type == ItemType::Knife) p.rot = atan2f(p.vy, p.vx);
 
     if (p.y + r >= cfg::LAVA_Y) {
@@ -449,13 +450,49 @@ bool Game::anyProjectile() const {
     return false;
 }
 
-void Game::finishRound() {
-    if (mode == GameMode::Versus) {
-        if (players[0].hit) ++players[1].score;
-        if (players[1].hit) ++players[0].score;
-    } else if (players[1].hit) {
-        ++players[0].score;
+void Game::registerBounce(Projectile& p) {
+    ev_ |= EV_BOUNCE;
+    if (p.type == ItemType::Bomb) {
+        if (!p.fuseOn) {
+            p.fuseOn = true;
+            p.fuse = cfg::BOMB_FUSE_SEC;
+        }
+    } else if (++p.bounces > cfg::MAX_BOUNCES) {
+        p.active = false;
     }
+}
+
+void Game::collideProjectiles() {
+    for (int i = 0; i < cfg::MAX_PROJ; ++i) {
+        Projectile& a = proj[i];
+        if (!a.active || a.exploding) continue;
+        for (int j = i + 1; j < cfg::MAX_PROJ && a.active; ++j) {
+            Projectile& b = proj[j];
+            if (!b.active || b.exploding) continue;
+            const float radius = specOf(a.type).radius + specOf(b.type).radius;
+            const float dx = b.x - a.x, dy = b.y - a.y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 >= radius * radius) continue;
+            const float d = sqrtf(d2);
+            const float nx = d > 0.0001f ? dx / d : 1.0f;
+            const float ny = d > 0.0001f ? dy / d : 0.0f;
+            const float overlap = (radius - d + 0.01f) * 0.5f;
+            a.x -= nx * overlap; a.y -= ny * overlap;
+            b.x += nx * overlap; b.y += ny * overlap;
+            const float vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+            if (vn >= 0.0f) continue;  // separating contacts must not bounce again
+            const float impulse = -(1.0f + 0.8f) * vn * 0.5f;
+            a.vx -= impulse * nx; a.vy -= impulse * ny;
+            b.vx += impulse * nx; b.vy += impulse * ny;
+            registerBounce(a);
+            registerBounce(b);
+            if (a.type == ItemType::Knife) a.rot = atan2f(a.vy, a.vx);
+            if (b.type == ItemType::Knife) b.rot = atan2f(b.vy, b.vx);
+        }
+    }
+}
+
+void Game::finishRound() {
     phase = Phase::RoundEnd;
     phaseTimer = cfg::ROUND_END_SEC;
     ev_ |= EV_ROUND_END;
@@ -467,7 +504,19 @@ uint32_t Game::update(float dt, const PlayerInput in[2]) {
 
     time_ += dt;
     for (int i = 0; i < 2; ++i) updatePlayer(i, in[i], dt);
-    for (auto& p : proj) updateProjectile(p, dt);
+    // Bound travel to two pixels per substep, including fast head-on knives.
+    float maxSpeed = 0.0f;
+    for (const auto& p : proj) {
+        if (p.active && !p.exploding) {
+            const float speed = sqrtf(p.vx * p.vx + p.vy * p.vy);
+            if (speed > maxSpeed) maxSpeed = speed;
+        }
+    }
+    const int steps = 1 + static_cast<int>((maxSpeed + (cfg::WORLD_G + cfg::BOOMERANG_PULL) * dt) * dt / 2.0f);
+    for (int step = 0; step < steps; ++step) {
+        for (auto& p : proj) updateProjectile(p, dt / steps);
+        collideProjectiles();
+    }
 
     if (phase == Phase::Playing) {
         if (mode == GameMode::Versus) {
@@ -480,16 +529,17 @@ uint32_t Game::update(float dt, const PlayerInput in[2]) {
                 }
             }
         }
-        const bool oneHit = players[0].hit != players[1].hit;
         const bool allThrown = players[0].itemUsed && players[1].itemUsed;
-        if ((suddenDeath_ && oneHit) || (allThrown && !anyProjectile())) finishRound();
+        const bool won = mode == GameMode::Versus &&
+                         (players[0].score >= cfg::WIN_SCORE || players[1].score >= cfg::WIN_SCORE);
+        if (won || (allThrown && !anyProjectile())) finishRound();
     } else if (phase == Phase::RoundEnd) {
         phaseTimer -= dt;
         if (phaseTimer <= 0.0f) {
             const int s0 = players[0].score;
             const int s1 = players[1].score;
-            if (mode == GameMode::Versus && (s0 >= cfg::WIN_SCORE || s1 >= cfg::WIN_SCORE) && s0 != s1) {
-                winner = s0 > s1 ? 0 : 1;
+            if (mode == GameMode::Versus && (s0 >= cfg::WIN_SCORE || s1 >= cfg::WIN_SCORE)) {
+                winner = s0 == s1 ? -1 : (s0 > s1 ? 0 : 1);
                 phase = Phase::MatchEnd;
                 ev_ |= EV_WIN;
             } else {

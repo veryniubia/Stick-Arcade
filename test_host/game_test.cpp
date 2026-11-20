@@ -70,7 +70,7 @@ static void testKnifeHit() {
     CHECK(!s.g.players[0].hit);
     // The round only ends once the opponent has thrown as well.
     CHECK(s.g.phase == Phase::Playing);
-    CHECK(s.g.players[0].score == 0);
+    CHECK(s.g.players[0].score == 1);
     s.g.players[1].itemUsed = true;
     s.run(0.1f);
     CHECK(s.g.phase == Phase::RoundEnd);
@@ -113,19 +113,100 @@ static void testShortHopDoesNotDodgeKnife() {
     CHECK(s.g.players[1].hit);
 }
 
+static void placeHit(Sim& s, int slot, int owner, int victim, bool blast = false) {
+    Projectile& p = s.g.proj[slot];
+    p = Projectile();
+    p.active = true;
+    p.type = blast ? ItemType::Bomb : ItemType::Knife;
+    p.owner = owner;
+    p.life = 1.0f;
+    p.x = s.g.players[victim].x;
+    p.y = s.g.players[victim].feetY - 8;
+    p.exploding = blast;
+    p.blastT = cfg::BOMB_BLAST_SEC;
+}
+
 static void testBothHit() {
     Sim s;
     s.g.begin(GameMode::Versus, 1);
-    s.g.players[0].item = ItemType::Knife;
-    s.g.players[1].item = ItemType::Knife;
-    s.in[0].charge = true;
-    s.in[1].charge = true;
-    s.run(0.75f);
-    s.in[0].charge = false;
-    s.in[1].charge = false;
-    s.run(1.0f);
+    placeHit(s, 0, 0, 1);
+    placeHit(s, 1, 1, 0);
+    s.tick();
     CHECK(s.g.players[0].hit && s.g.players[1].hit);
     CHECK(s.g.players[0].score == 1 && s.g.players[1].score == 1);
+}
+
+static void testTwoSources() {
+    for (int first = 0; first < 2; ++first) {
+        Sim s;
+        s.g.begin(GameMode::Versus, 1);
+        placeHit(s, 0, first, 0, true);
+        s.run(0.2f);
+        CHECK(s.g.players[1].score == 1);
+        CHECK(s.g.players[0].hitSerial == 1);
+        placeHit(s, 1, 1 - first, 0, true);
+        s.tick();
+        CHECK(s.g.players[1].score == 2);
+        CHECK(s.g.players[0].hitSources == 3);
+        CHECK(s.g.players[0].hitSerial == 2);
+        CHECK(s.g.players[0].hitFlash > 0.99f);
+        s.run(0.5f);
+        CHECK(s.g.players[1].score == 2); // persistent blasts cannot deal repeated damage
+        s.g.players[0].itemUsed = s.g.players[1].itemUsed = true;
+        s.run(2.0f);
+        CHECK(s.g.players[0].hitSources == 0);
+    }
+}
+
+static void testImmediateWinAndDraw() {
+    for (int draw = 0; draw < 2; ++draw) {
+        Sim s;
+        s.g.begin(GameMode::Versus, 1);
+        s.g.players[0].score = 4;
+        s.g.players[1].score = draw ? 4 : 0;
+        placeHit(s, 0, 0, 1);
+        if (draw) placeHit(s, 1, 1, 0);
+        s.tick();
+        CHECK(s.g.phase == Phase::RoundEnd);
+        CHECK(s.g.players[0].score == 5);
+        CHECK(s.g.isDraw() == bool(draw));
+        placeHit(s, 2, 1, 0); // later damage must not count
+        s.run(cfg::ROUND_END_SEC + 0.1f);
+        CHECK(s.g.phase == Phase::MatchEnd);
+        CHECK(s.g.winner == (draw ? -1 : 0));
+        CHECK(s.g.players[1].score == (draw ? 5 : 0));
+    }
+}
+
+static void testWeaponCollisions() {
+    for (int ta = 1; ta <= 4; ++ta) for (int tb = 1; tb <= 4; ++tb) {
+        Sim s;
+        s.g.begin(GameMode::Versus, 1);
+        Projectile& a = s.g.proj[0];
+        Projectile& b = s.g.proj[1];
+        a.active = b.active = true;
+        a.type = static_cast<ItemType>(ta); b.type = static_cast<ItemType>(tb);
+        a.owner = 0; b.owner = 1;
+        a.x = 114; b.x = 126; a.y = b.y = 40;
+        a.vx = 360; b.vx = -360;
+        s.tick();
+        CHECK(a.vx < 0 && b.vx > 0);
+        CHECK(a.owner == 0 && b.owner == 1);
+        CHECK(a.x < b.x);
+        CHECK(s.ev & EV_BOUNCE);
+        CHECK(ta == 3 ? a.fuseOn && !a.exploding : a.bounces == 1);
+        CHECK(tb == 3 ? b.fuseOn && !b.exploding : b.bounces == 1);
+        s.tick();
+        CHECK(ta == 3 || a.bounces == 1);
+        CHECK(tb == 3 || b.bounces == 1);
+    }
+    Sim s;
+    s.g.begin(GameMode::Versus, 1);
+    placeHit(s, 0, 0, 1, true);
+    Projectile& b = s.g.proj[1];
+    b.active = true; b.type = ItemType::Knife; b.x = 194; b.y = 65; b.vx = 100;
+    s.tick();
+    CHECK(b.vx == 100 && b.bounces == 0); // blasts do not deflect weapons
 }
 
 static void testRefreshRule() {
@@ -169,25 +250,21 @@ static void testRoundWaitsForBothThrows() {
     CHECK(!s.g.players[0].hit && !s.g.players[1].hit);
 }
 
-// Plays one round where both knives hit, from 3:3 to 4:4, so the next round is sudden death.
-static void reachSuddenDeath(Sim& s) {
+// Plays one round with a hit on each side, from 3:3 to 4:4.
+static void reachFourEach(Sim& s) {
     s.g.players[0].score = 3;
     s.g.players[1].score = 3;
-    s.g.players[0].item = ItemType::Knife;
-    s.g.players[1].item = ItemType::Knife;
-    s.in[0].charge = true;
-    s.in[1].charge = true;
-    s.run(0.75f);
-    s.in[0].charge = false;
-    s.in[1].charge = false;
-    s.run(1.0f);
+    placeHit(s, 0, 0, 1);
+    placeHit(s, 1, 1, 0);
+    s.g.players[0].itemUsed = s.g.players[1].itemUsed = true;
+    s.tick();
     s.run(cfg::ROUND_END_SEC + 0.1f);
 }
 
-static void testSuddenDeath() {
+static void testFirstToFive() {
     Sim s;
     s.g.begin(GameMode::Versus, 3);
-    reachSuddenDeath(s);
+    reachFourEach(s);
     CHECK(s.g.players[0].score == 4 && s.g.players[1].score == 4);
     CHECK(s.g.phase == Phase::Playing);
 
@@ -204,10 +281,10 @@ static void testSuddenDeath() {
     CHECK(s.g.matchLoser() == 1);
 }
 
-static void testSuddenDeathLateDamageIgnored() {
+static void testLateDamageIgnored() {
     Sim s;
     s.g.begin(GameMode::Versus, 3);
-    reachSuddenDeath(s);
+    reachFourEach(s);
     s.g.players[0].item = ItemType::Knife;
     s.shoot(0, 0.0f, 0.75f);
     s.run(0.8f);
@@ -539,10 +616,13 @@ int main() {
     testFullJumpDodgesKnife();
     testShortHopDoesNotDodgeKnife();
     testBothHit();
+    testTwoSources();
+    testImmediateWinAndDraw();
+    testWeaponCollisions();
     testRefreshRule();
     testRoundWaitsForBothThrows();
-    testSuddenDeath();
-    testSuddenDeathLateDamageIgnored();
+    testFirstToFive();
+    testLateDamageIgnored();
     testMatchLoserOnlyWhenDecided();
     testSoloRound();
     testSoloNeverEnds();

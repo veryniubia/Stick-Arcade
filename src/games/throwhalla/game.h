@@ -44,6 +44,8 @@ struct Player {
     int8_t face = 1;     // current facing: equals dir, or -dir while aiming backward
     float cooldown = 0.0f;
     bool hit = false;
+    uint8_t hitSources = 0;  // one damage per original thrower per round
+    uint8_t hitSerial = 0;   // changes on every valid hit, including a second hit
     float hitFlash = 0.0f;
     uint8_t score = 0;
 };
@@ -99,12 +101,12 @@ public:
 
     // Index of the player who has lost the match (the 5th point is already decided), or -1.
     int matchLoser() const;
+    bool isDraw() const;
 
 private:
     uint32_t rng_ = 1;
     uint32_t ev_ = 0;
     float time_ = 0.0f;
-    bool suddenDeath_ = false;  // 4:4 in versus: the first damage decides the match
     float platPhase_[2] = {0, 0};
     float obsPhase_[cfg::OBSTACLE_COUNT] = {};
 
@@ -117,6 +119,8 @@ private:
     void fire(int idx);
     void updatePlayer(int idx, const PlayerInput& in, float dt);
     void updateProjectile(Projectile& p, float dt);
+    void collideProjectiles();
+    void registerBounce(Projectile& p);
     bool collideWorld(Projectile& p, float radius, float wallRest, float obstacleRest);
     bool bounceOffObstacles(Projectile& p, float radius, float rest);
     bool bounceOffPlayers(Projectile& p, float radius, float rest);

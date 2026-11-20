@@ -42,7 +42,9 @@ Hold the device in landscape and tilt it to aim. The tilt is multiplied by the A
 downward. Hold **A** to charge (the power bar bounces back at max) and release to throw; **B** jumps, longer holds
 jump higher.
 
-Items: knife, axe, bomb, boomerang. Everything bounces off the walls, ceiling and the small floating round obstacles
+Items: knife, axe, bomb, boomerang. Flying weapons collide and bounce apart without changing their original owner.
+Weapon collisions count toward the bounce limit and start a bomb fuse; explosions do not deflect weapons.
+Everything bounces off the walls, ceiling and the small floating round obstacles
 (3 bounces max). Anything that falls into the lava disappears. A bomb never explodes on contact: it bounces off
 players, its fuse starts at its first bounce, and it also explodes when it reaches the lava; the blast grows slowly, so
 it can be jumped over. Players stand on platforms that move up and down. The next item is shown only to you.
@@ -50,10 +52,13 @@ it can be jumped over. Players stand on platforms that move up and down. The nex
 Rounds (online): each player throws exactly one item per round (your own bomb, boomerang or bounced knife can hurt
 you). The round ends when both have thrown and nothing is flying any more; then both get a fresh random item.
 **Turn timeout:** a player who has not thrown 20 s after the round started forfeits the throw (no point lost); in the
-last 5 s a bar shrinks along the top of that player's screen. A player who is hit gives the opponent 1 point; each
-player can be hit once per round. First to 5 wins. At 4:4 it is sudden death: the first damage decides the match, later
-damage does not count. If both are hit in the very same instant the round is scored normally (5:5) and play continues.
-The loser tips over and stays lying on the platform.
+last 5 s a bar shrinks along the top of that player's screen. Every valid hit immediately gives the opponent 1 point.
+Each player can take one hit from their own weapon and one from the opponent's weapon per round (up to 2 points
+for the opponent); a persistent blast cannot repeatedly score. Hits immediately show `OUCH!` for your injury and
+`HIT!` for the opponent's injury at the top for 0.7 s; simultaneous injuries show both labels on separate lines.
+First to 5 wins immediately, without waiting for both throws or flying weapons. Damage in the same 60 Hz tick
+is resolved together: if both reach 5, the match ends in a draw. Later damage is ignored.
+The loser tips over and stays lying on the platform; both players fall in a draw.
 
 Solo: the opponent stands still and counts as "already thrown". You throw once per round; the round ends when nothing is
 flying, you get a new item, and every hit on the opponent scores a point. There is no winner and no end.
@@ -151,6 +156,19 @@ A game is one folder `src/games/<name>/` with two halves. The rules and the netw
 
 ## Build, upload, debug build
 
+### Windows local setup
+
+Create a project-local Python environment and install PlatformIO plus the host-side asset/test script dependencies:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install platformio pyserial Pillow
+```
+
+Use `.\.venv\Scripts\pio.exe` in place of `pio` in the commands below if PlatformIO is not installed globally.
+Find the connected board's current serial port with `.\.venv\Scripts\pio.exe device list`; the port can change
+when the device is reconnected or enters its bootloader.
+
 ```
 pio run -e m5stack-sticks3                                # all games
 pio run -e m5stack-sticks3 -t upload --upload-port COM9   # upload
@@ -168,7 +186,7 @@ g++ -std=c++17 -I src test_host/core_test.cpp src/core/game_instance.cpp src/gam
 g++ -std=c++17 -I src test_host/net_test.cpp src/net/net_session.cpp src/core/game_instance.cpp src/games/throwhalla/throwhalla.cpp src/games/throwhalla/game.cpp src/games/paddle/paddle.cpp -o test_host/net_test.exe
 ```
 
-- `game_test`: Throwhalla rules (physics, rounds, sudden death, solo rounds, turn timeout).
+- `game_test`: Throwhalla rules (physics, weapon collisions, damage sources, immediate scoring, wins/draws, solo rounds, turn timeout).
 - `core_test`: shake detector (including the highest values measured in normal play), settings format, arena and game
   instances, bitmap decoder, Paddle rules and encoding.
 - `net_test`: a fake link with loss, latency, jitter and reordering drives two sessions: pairing (also under 40% loss and
@@ -226,8 +244,8 @@ Hardware findings behind the choices:
 - **The shake detector has not been tried by hand at the game's 60 Hz sampling rate.** The thresholds come from the
   200 Hz measurement. If the exit gesture is missed or fires by accident, tune `ShakeDetector::kThresholdG`
   (`src/core/shake.h`); the debug build prints `SHAKE` on the serial port when it fires.
-- The last firmware (HELLO with `maxPlayers`/`room`, bitmap decoder) was built but could not be uploaded because the
-  devices were unplugged; they run the previous release build. Re-flash them before the next hardware test.
+- Both connected devices (COM4 and COM6) have been flashed with the Throwhalla update and checked over the real
+  ESP-NOW link: weapon deflection, immediate damage/scoring, two damage sources, 5:5 draw and rematch.
 - A PC preview of the UI with M5GFX's `PlatformIO_SDL` example (the game and UI code only needs `display::canvas()`
   to be replaced) to speed up UI work.
 - 3-4 players: HELLO already carries `maxPlayers` and a room byte, the session pairs only two devices.
@@ -248,3 +266,14 @@ This project targets the M5Stack StickS3 with the Arduino framework.
 5. Open the serial monitor at 115200 baud with `pio device monitor`.
 
 The first build downloads the ESP32 toolchain, Arduino framework, and M5Unified library. No fixed serial port is configured, so PlatformIO can detect the connected board. If upload cannot find the board, check Windows Device Manager for its COM port and add `upload_port = COMx` under the environment in `platformio.ini`.
+
+### Throwhalla deterministic hardware checks (DEBUG_REMOTE)
+
+After entering a solo game or completing online pairing, send these commands to the host:
+`c` resets scores and launches two opposing knives for a collision check;
+`h` places a self-owned blast on player 0; `H` places an opponent-owned blast on player 0;
+`t` sets 4:4 and places a blast on each player to verify a 5:5 draw;
+`w` sets 4:0 and hits player 1 to verify a 5:0 win (or a dummy hit in solo).
+`d` prints a `STATE` hex dump of the normal game snapshot on either device.
+These commands only exist in DEBUG_REMOTE builds. Run `test_host/throwhalla_check.py COM4 COM6 <output_dir>`
+for state assertions, screenshots, a solo check and an online rematch check.

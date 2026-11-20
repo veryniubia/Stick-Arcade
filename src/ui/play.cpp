@@ -389,7 +389,18 @@ void debugLine() {
                   static_cast<unsigned>(net_espnow::overflowCount()), g_session.peerNearby(millis()) ? 1 : 0);
 }
 
-bool debugKey(char key) { return g_gi.game && game().debugKey(key); }
+bool debugKey(char key) {
+    if (!g_gi.game) return false;
+    if (key == 'd') {
+        arcade::Writer w;
+        game().encode(w);
+        Serial.print("STATE ");
+        for (size_t i = 0; i < w.n; ++i) Serial.printf("%02x", w.buf[i]);
+        Serial.println();
+        return true;
+    }
+    return game().debugKey(key);
+}
 #endif
 
 }  // namespace play

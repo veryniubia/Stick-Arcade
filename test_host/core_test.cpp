@@ -260,6 +260,42 @@ static void testPaddleEncoding() {
     CHECK(!c.decode(badR) && c.bx == bx);
 }
 
+static void testThrowhallaEncoding() {
+    ThrowhallaGame a, b;
+    a.begin(arcade::Mode::Host, 1);
+    b.begin(arcade::Mode::Client, 1);
+    auto& g = a.core();
+    g.players[0].hit = true;
+    g.players[0].hitSources = 3;
+    g.players[0].hitSerial = 2;
+    g.players[0].hitFlash = 0.85f;
+    g.players[1].score = 2;
+    for (auto& p : g.proj) {
+        p.active = true;
+        p.type = ItemType::Knife;
+    }
+    arcade::Writer w;
+    a.encode(w);
+    CHECK(w.n < 175);
+    arcade::Reader r(w.buf, w.n);
+    CHECK(b.decode(r));
+    CHECK(b.core().players[0].hitSources == 3 && b.core().players[0].hitSerial == 2);
+    CHECK(b.core().players[1].score == 2);
+    CHECK(std::fabs(b.core().players[0].hitFlash - 0.85f) < 0.005f);
+    for (size_t n = 0; n < w.n; ++n) {
+        arcade::Reader cut(w.buf, n);
+        CHECK(!b.decode(cut));
+        CHECK(b.core().players[0].hitSources == 3 && b.core().players[1].score == 2);
+    }
+    g.phase = Phase::MatchEnd;
+    g.winner = -1;
+    g.players[0].score = g.players[1].score = 5;
+    arcade::Writer tie;
+    a.encode(tie);
+    arcade::Reader tr(tie.buf, tie.n);
+    CHECK(b.decode(tr) && b.core().isDraw() && b.core().winner == -1);
+}
+
 // ---- bitmaps ----
 
 static void testBitmapDecode() {
@@ -298,6 +334,7 @@ static void testBitmapDecode() {
 }
 
 int main() {
+    testThrowhallaEncoding();
     testBitmapDecode();
     testShake();
     testSettingsCodec();
