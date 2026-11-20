@@ -1,5 +1,7 @@
-// Host-side tests for the online session (pairing, sync, loss, disconnects).
-// Build: g++ -std=c++17 -I src test_host/net_test.cpp src/net_session.cpp src/game.cpp -o test_host/net_test.exe
+// Host-side tests for the online session (pairing, game filtering, sync, loss, disconnects), run against Throwhalla.
+// Build: g++ -std=c++17 -I src test_host/net_test.cpp src/net/net_session.cpp src/core/game_instance.cpp
+//        src/games/throwhalla/throwhalla.cpp src/games/throwhalla/game.cpp src/games/paddle/paddle.cpp
+//        -o test_host/net_test.exe
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -9,8 +11,17 @@
 
 // The tests poke at session internals to script the game; production code keeps them private.
 #define private public
-#include "net_session.h"
+#include "net/net_session.h"
 #undef private
+
+#include "games/paddle/paddle.h"
+#include "games/throwhalla/throwhalla.h"
+
+// The tests never draw: the view half of the games is not linked.
+void ThrowhallaGame::draw(int, const arcade::DrawCtx&) {}
+void ThrowhallaGame::sfx(uint32_t) {}
+void PaddleGame::draw(int, const arcade::DrawCtx&) {}
+void PaddleGame::sfx(uint32_t) {}
 
 static int failures = 0;
 
@@ -31,6 +42,7 @@ struct Endpoint : net::Transport {
     int id = 0;
     uint8_t mac[6] = {};
     net::Session s;
+    arcade::GameInstance gi;
     net::LocalInput in;
     uint32_t nextFrame = 0;
     int frameParity = 0;
@@ -38,6 +50,9 @@ struct Endpoint : net::Transport {
     int fireEvents = 0;       // frames whose events contained EV_FIRE
     bool dead = false;        // stops calling update (device turned off)
 
+    ~Endpoint() { arcade::gameDestroy(gi); }
+    Game& g() { return static_cast<ThrowhallaGame*>(gi.game)->core(); }
+    void pressB() { ++in.pad.bCount; }
     void send(const uint8_t* mac, const uint8_t* data, size_t len) override;
 };
 
@@ -67,12 +82,13 @@ struct Link {
     }
     float frand() { return (rand() % 10000) / 10000.0f; }
 
-    Endpoint& add(uint32_t nonce, uint32_t startMs = 0) {
+    Endpoint& add(uint32_t nonce, uint32_t startMs = 0, const arcade::GameInfo* info = &kThrowhallaInfo) {
         auto ep = std::make_unique<Endpoint>();
         ep->link = this;
         ep->id = static_cast<int>(eps.size());
         for (int i = 0; i < 6; ++i) ep->mac[i] = static_cast<uint8_t>(0x10 * (ep->id + 1) + i);
-        ep->s.begin(ep.get(), nonce, now);
+        ep->gi = arcade::gameCreate(*info);
+        ep->s.begin(ep.get(), nonce, now, *info, ep->gi.game);
         ep->nextFrame = now + startMs;
         eps.push_back(std::move(ep));
         return *eps.back();
@@ -117,7 +133,6 @@ struct Link {
             const uint32_t ev = e->s.update(now, e->in);
             e->events |= ev;
             if (ev & EV_FIRE) ++e->fireEvents;
-            e->in.jump = false;
             e->in.again = false;
         }
         deliver();
@@ -143,10 +158,10 @@ constexpr uint32_t kHost = 900;
 constexpr uint32_t kClient = 100;
 
 static void freezeWorld(Endpoint& host, Endpoint& client) {
-    host.s.game_.world.obstacles = false;
-    host.s.game_.world.movePlatforms = false;
-    client.s.view_.world.obstacles = false;
-    client.s.view_.world.movePlatforms = false;
+    host.g().world.obstacles = false;
+    host.g().world.movePlatforms = false;
+    client.g().world.obstacles = false;
+    client.g().world.movePlatforms = false;
 }
 
 static bool bothPlaying(Link& l) {
@@ -211,10 +226,71 @@ static void testThreeDevices() {
     }
 }
 
+// Devices running another game, or another version of the same game, ignore each other and stay unnoticed.
+static void testOtherGameIgnored() {
+    const arcade::GameInfo otherGame = {"other", 9, 1, sizeof(ThrowhallaGame), 0, kThrowhallaInfo.create, 2};
+    const arcade::GameInfo otherVersion = {"throwhalla", 1, 2, sizeof(ThrowhallaGame), 0, kThrowhallaInfo.create, 2};
+    const arcade::GameInfo otherPlayers = {"throwhalla", 1, 1, sizeof(ThrowhallaGame), 0, kThrowhallaInfo.create, 4};
+    for (const arcade::GameInfo* other : {&otherGame, &otherVersion, &otherPlayers}) {
+        Link l;
+        Endpoint& a = l.add(kClient);
+        Endpoint& b = l.add(kHost, 0, other);
+        l.run(5000);
+        CHECK(a.s.status() == Status::Searching && b.s.status() == Status::Searching);
+        CHECK(!a.s.peerNearby(l.now) && !b.s.peerNearby(l.now));
+    }
+    // The third device with the right game still finds its partner among the strangers.
+    Link l;
+    l.add(kClient);
+    l.add(kHost, 0, &otherGame);
+    Endpoint& c = l.add(700);
+    l.run(8000);
+    CHECK(l.eps[0]->s.status() != Status::Searching && c.s.status() != Status::Searching);
+    CHECK(l.eps[1]->s.status() == Status::Searching);
+}
+
+// A device that is not joinable (solo play) is noticed but does not pair until it opts in.
+static void testJoinableGate() {
+    Link l;
+    Endpoint& c = l.add(kClient);
+    Endpoint& h = l.add(kHost);
+    c.s.setJoinable(false);
+    h.s.setJoinable(false);
+    l.run(3000);
+    CHECK(c.s.status() == Status::Searching && h.s.status() == Status::Searching);
+    CHECK(c.s.peerNearby(l.now) && h.s.peerNearby(l.now));
+
+    c.s.setJoinable(true);  // only one side wants to play: still nothing
+    l.run(3000);
+    CHECK(c.s.status() == Status::Searching && h.s.status() == Status::Searching);
+
+    h.s.setJoinable(true);
+    CHECK(l.runUntil(8000, [&] { return bothPlaying(l); }));
+    CHECK(h.s.role() == net::Role::Host);
+}
+
+static void testPeerNearbyExpires() {
+    Link l;
+    Endpoint& a = l.add(kClient);
+    Endpoint& b = l.add(kHost);
+    a.s.setJoinable(false);
+    b.s.setJoinable(false);
+    l.run(1000);
+    CHECK(a.s.peerNearby(l.now));
+    l.cut = true;
+    l.run(2000);
+    CHECK(!a.s.peerNearby(l.now));
+    Link alone;
+    Endpoint& x = alone.add(kClient);
+    alone.run(2000);
+    CHECK(!x.s.peerNearby(alone.now));
+}
+
 static void expectViewMatches(Endpoint& h, Endpoint& c, int& mismatches) {
-    const Game& g = h.s.game_;
-    const Game& v = c.s.view_;
+    const Game& g = h.g();
+    const Game& v = c.g();
     bool ok = g.phase == v.phase && g.winner == v.winner;
+    ok = ok && std::fabs(g.turnTimer - v.turnTimer) < 0.11f;
     for (int i = 0; i < 2; ++i) {
         const Player& a = g.players[i];
         const Player& b = v.players[i];
@@ -241,18 +317,17 @@ static void expectViewMatches(Endpoint& h, Endpoint& c, int& mismatches) {
     if (!ok) ++mismatches;
 }
 
-static void scriptRandomInput(Link& l, Endpoint& e, uint32_t& rng) {
+static void scriptRandomInput(Endpoint& e, uint32_t& rng) {
     auto r = [&] {
         rng ^= rng << 13;
         rng ^= rng >> 17;
         rng ^= rng << 5;
         return rng;
     };
-    if (r() % 40 == 0) e.in.aimDeg = static_cast<float>(r() % 120) - 20.0f;
-    if (r() % 50 == 0) e.in.charge = !e.in.charge;
-    if (r() % 90 == 0) e.in.jump = true;
-    e.in.jumpHeld = (r() % 3) != 0;
-    (void)l;
+    if (r() % 40 == 0) e.in.pad.aim = static_cast<float>(r() % 120) - 20.0f;
+    if (r() % 50 == 0) e.in.pad.a = !e.in.pad.a;
+    if (r() % 90 == 0) e.pressB();
+    e.in.pad.b = (r() % 3) != 0;
 }
 
 static void testSnapshotMatchesHostWithoutLoss() {
@@ -266,15 +341,15 @@ static void testSnapshotMatchesHostWithoutLoss() {
     int projSeen = 0;
     for (int i = 0; i < 60000; ++i) {
         if (i % 16 == 0) {
-            scriptRandomInput(l, h, rngA);
-            scriptRandomInput(l, c, rngB);
+            scriptRandomInput(h, rngA);
+            scriptRandomInput(c, rngB);
         }
         const uint16_t seq = h.s.snapSeq_;
         l.tick();
         if (h.s.snapSeq_ != seq && l.q.empty()) {
             expectViewMatches(h, c, mismatches);
             ++compared;
-            for (const auto& p : h.s.game_.proj) projSeen += p.active;
+            for (const auto& p : h.g().proj) projSeen += p.active;
         }
     }
     CHECK(compared > 3000);
@@ -296,16 +371,16 @@ static void testSnapshotConvergesUnderLoss() {
     int checks = 0, bad = 0;
     for (int i = 0; i < 60000; ++i) {
         if (i % 16 == 0) {
-            scriptRandomInput(l, h, rngA);
-            scriptRandomInput(l, c, rngB);
+            scriptRandomInput(h, rngA);
+            scriptRandomInput(c, rngB);
         }
         l.tick();
     }
-    h.in = net::LocalInput();
-    c.in = net::LocalInput();
+    h.in.pad = PadInput();
+    c.in.pad = PadInput();
     l.run(300);
-    const Game& g = h.s.game_;
-    const Game& v = c.s.view_;
+    const Game& g = h.g();
+    const Game& v = c.g();
     for (int i = 0; i < 2; ++i) {
         ++checks;
         bad += g.players[i].score != v.players[i].score;
@@ -318,18 +393,18 @@ static void testSnapshotConvergesUnderLoss() {
 static void duelSetup(Link& l, Endpoint& h, Endpoint& c) {
     freezeWorld(h, c);
     CHECK(l.runUntil(20000, [&] { return bothPlaying(l); }));
-    h.s.game_.players[0].item = ItemType::Knife;
-    h.s.game_.players[0].itemUsed = false;
-    h.s.game_.players[0].score = 4;
-    h.s.game_.players[1].item = ItemType::Axe;
-    h.s.game_.players[1].itemUsed = true;  // the round ends once both have thrown
+    h.g().players[0].item = ItemType::Knife;
+    h.g().players[0].itemUsed = false;
+    h.g().players[0].score = 4;
+    h.g().players[1].item = ItemType::Axe;
+    h.g().players[1].itemUsed = true;  // the round ends once both have thrown
 }
 
 static void throwKnife(Link& l, Endpoint& h) {
-    h.in.aimDeg = 0.0f;
-    h.in.charge = true;
+    h.in.pad.aim = 0.0f;
+    h.in.pad.a = true;
     l.run(400);
-    h.in.charge = false;
+    h.in.pad.a = false;
 }
 
 static void testMatchFlowAndRematch(float loss, int latency, int jitter) {
@@ -346,11 +421,11 @@ static void testMatchFlowAndRematch(float loss, int latency, int jitter) {
     c.fireEvents = 0;
 
     throwKnife(l, h);
-    CHECK(l.runUntil(5000, [&] { return h.s.game_.phase == Phase::MatchEnd; }));
-    CHECK(h.s.game_.winner == 0 && h.s.game_.players[0].score == 5);
-    CHECK(l.runUntil(2000, [&] { return c.s.view_.phase == Phase::MatchEnd; }));
-    CHECK(c.s.view_.winner == 0);
-    CHECK(c.s.view_.players[0].score == 5 && c.s.view_.players[1].score == 0);
+    CHECK(l.runUntil(5000, [&] { return h.g().phase == Phase::MatchEnd; }));
+    CHECK(h.g().winner == 0 && h.g().players[0].score == 5);
+    CHECK(l.runUntil(2000, [&] { return c.g().phase == Phase::MatchEnd; }));
+    CHECK(c.g().winner == 0);
+    CHECK(c.g().players[0].score == 5 && c.g().players[1].score == 0);
     CHECK(h.fireEvents == 1);
     CHECK(c.fireEvents <= 1);
     if (loss == 0.0f) CHECK(c.fireEvents == 1);
@@ -358,16 +433,16 @@ static void testMatchFlowAndRematch(float loss, int latency, int jitter) {
     // One side asking is not enough.
     h.in.again = true;
     l.run(500);
-    CHECK(h.s.game_.phase == Phase::MatchEnd);
+    CHECK(h.g().phase == Phase::MatchEnd);
     CHECK(h.s.myAgain() && !h.s.oppAgain());
     CHECK(l.runUntil(1000, [&] { return c.s.oppAgain(); }));
 
     c.in.again = true;
     CHECK(l.runUntil(3000, [&] { return h.s.matchId_ != firstMatch; }));
-    CHECK(h.s.game_.players[0].score == 0 && h.s.game_.players[1].score == 0);
+    CHECK(h.g().players[0].score == 0 && h.g().players[1].score == 0);
     CHECK(l.runUntil(6000, [&] { return bothPlaying(l); }));
     l.run(300);
-    CHECK(c.s.view_.players[0].score == 0 && c.s.view_.phase == Phase::Playing);
+    CHECK(c.g().players[0].score == 0 && c.g().phase == Phase::Playing);
     CHECK(c.s.matchId_ == h.s.matchId_);
     CHECK(!c.s.myAgain() && !h.s.myAgain());
 }
@@ -378,10 +453,10 @@ static void testMatchEndWithoutRematchStays() {
     Endpoint& h = l.add(kHost);
     duelSetup(l, h, c);
     throwKnife(l, h);
-    CHECK(l.runUntil(5000, [&] { return h.s.game_.phase == Phase::MatchEnd; }));
+    CHECK(l.runUntil(5000, [&] { return h.g().phase == Phase::MatchEnd; }));
     l.run(3000);
     CHECK(h.s.status() == Status::Playing && c.s.status() == Status::Playing);
-    CHECK(h.s.game_.phase == Phase::MatchEnd);
+    CHECK(h.g().phase == Phase::MatchEnd);
 }
 
 static void testClientJumpSurvivesLoss() {
@@ -395,12 +470,12 @@ static void testClientJumpSurvivesLoss() {
         Endpoint& h = l.add(kHost);
         freezeWorld(h, c);
         CHECK(l.runUntil(30000, [&] { return bothPlaying(l); }));
-        c.in.jump = true;
-        c.in.jumpHeld = true;
+        c.pressB();
+        c.in.pad.b = true;
         bool jumped = false;
         for (int i = 0; i < 600 && !jumped; ++i) {
             l.tick();
-            jumped = h.s.game_.players[1].h > 0.0f;
+            jumped = h.g().players[1].h > 0.0f;
         }
         CHECK(jumped);
     }
@@ -415,18 +490,47 @@ static void testClientFireReachesHost() {
     Endpoint& h = l.add(kHost);
     freezeWorld(h, c);
     CHECK(l.runUntil(20000, [&] { return bothPlaying(l); }));
-    h.s.game_.players[1].item = ItemType::Knife;
-    h.s.game_.players[1].itemUsed = false;
-    c.in.aimDeg = 0.0f;
-    c.in.charge = true;
+    h.g().players[1].item = ItemType::Knife;
+    h.g().players[1].itemUsed = false;
+    c.in.pad.aim = 0.0f;
+    c.in.pad.a = true;
     l.run(400);
-    c.in.charge = false;
+    c.in.pad.a = false;
     bool fired = false;
     for (int i = 0; i < 600 && !fired; ++i) {
         l.tick();
-        for (const auto& p : h.s.game_.proj) fired = fired || (p.active && p.owner == 1);
+        for (const auto& p : h.g().proj) fired = fired || (p.active && p.owner == 1);
     }
     CHECK(fired);
+}
+
+// Presses made before the match starts (menus, READY, countdown) must not turn into a jump when play begins.
+static void testEarlyPressesAreNotJumps() {
+    Link l;
+    Endpoint& c = l.add(kClient);
+    Endpoint& h = l.add(kHost);
+    freezeWorld(h, c);
+    for (int i = 0; i < 5; ++i) {
+        h.pressB();
+        c.pressB();
+    }
+    CHECK(l.runUntil(8000, [&] { return bothPlaying(l); }));
+    l.run(500);
+    CHECK(h.g().players[0].h == 0.0f && h.g().players[1].h == 0.0f);
+}
+
+// Nobody throws: the turn timeout ends the round on the host and the client sees the same state.
+static void testTurnTimeoutReachesClient() {
+    Link l;
+    Endpoint& c = l.add(kClient);
+    Endpoint& h = l.add(kHost);
+    freezeWorld(h, c);
+    CHECK(l.runUntil(8000, [&] { return bothPlaying(l); }));
+    CHECK(l.runUntil(30000, [&] { return h.g().phase == Phase::RoundEnd; }));
+    CHECK(h.g().players[0].itemUsed && h.g().players[1].itemUsed);
+    CHECK(l.runUntil(500, [&] { return c.g().phase == Phase::RoundEnd; }));
+    CHECK(c.g().players[0].itemUsed && c.g().players[1].itemUsed);
+    CHECK(h.g().players[0].score == 0 && h.g().players[1].score == 0);
 }
 
 static void testLinkLostAndRecover() {
@@ -439,15 +543,15 @@ static void testLinkLostAndRecover() {
 
     l.cut = true;
     CHECK(l.runUntil(1500, [&] { return h.s.status() == Status::LinkLost && c.s.status() == Status::LinkLost; }));
-    const float clock = h.s.game_.clock();
+    const float clock = h.g().clock();
     l.run(2000);
-    CHECK(std::fabs(h.s.game_.clock() - clock) < 0.001f);  // the host pauses while the link is down
+    CHECK(std::fabs(h.g().clock() - clock) < 0.001f);  // the host pauses while the link is down
     CHECK(h.s.status() == Status::LinkLost);
 
     l.cut = false;
     CHECK(l.runUntil(1000, [&] { return bothPlaying(l); }));
     l.run(500);
-    CHECK(h.s.game_.clock() > clock + 0.2f);
+    CHECK(h.g().clock() > clock + 0.2f);
 }
 
 static void testTimeout() {
@@ -496,20 +600,20 @@ static void testIgnoresForeignAndStalePackets() {
     CHECK(l.runUntil(8000, [&] { return h.s.status() == Status::Playing && c.s.status() == Status::Playing; }));
 
     // A forged input with the right session id but from another MAC must not move the host's opponent.
-    uint8_t pkt[14] = {0xD7, 4, static_cast<uint8_t>(h.s.sid_ & 0xFF), static_cast<uint8_t>(h.s.sid_ >> 8),
-                       0, 0, 0, 0, 0, 0, 0x10, 0x27, 1, 0};  // aim = 100.00, charge
-    h.s.remote_.aim = 0.0f;
+    uint8_t pkt[15] = {0xD7, 4, static_cast<uint8_t>(h.s.sid_ & 0xFF), static_cast<uint8_t>(h.s.sid_ >> 8),
+                       0, 0, 0, 0, 0, 0, 0x10, 0x27, 1, 0, 0};  // aim = 100.00, A held
+    h.s.remotePad_.aim = 0.0f;
     h.s.onReceive(x.mac, pkt, sizeof(pkt), l.now);
-    CHECK(h.s.remote_.aim == 0.0f);
+    CHECK(h.s.remotePad_.aim == 0.0f);
 
     // Same MAC but wrong session id.
     pkt[2] ^= 0xFF;
     h.s.onReceive(c.mac, pkt, sizeof(pkt), l.now);
-    CHECK(h.s.remote_.aim == 0.0f);
+    CHECK(h.s.remotePad_.aim == 0.0f);
 
     // The client must not rewind to an older snapshot.
     const uint16_t seq = c.s.rxSeq_;
-    const float clock = c.s.view_.clock();
+    const float clock = c.g().clock();
     uint8_t stale[250];
     size_t n = 0;
     {
@@ -523,7 +627,46 @@ static void testIgnoresForeignAndStalePackets() {
         stale[n++] = old >> 8;
     }
     c.s.onReceive(h.mac, stale, n, l.now);  // truncated: must be rejected without touching state
-    CHECK(c.s.view_.clock() == clock);
+    CHECK(c.g().clock() == clock);
+}
+
+// The same fixture runs any game: PADDLE over a lossy link, from pairing to the match end and the rematch.
+static PaddleGame& paddleOf(Endpoint& e) { return *static_cast<PaddleGame*>(e.gi.game); }
+
+static void testPaddleOverNetwork(float loss, int latency, int jitter) {
+    Link l;
+    l.loss = loss;
+    l.latency = latency;
+    l.jitter = jitter;
+    l.rng = 31;
+    Endpoint& c = l.add(kClient, 0, &kPaddleInfo);
+    Endpoint& h = l.add(kHost, 0, &kPaddleInfo);
+    CHECK(l.runUntil(30000, [&] { return bothPlaying(l); }));
+
+    // Each side's tilt moves its own paddle on the host and in the other side's view.
+    h.in.pad.aim = -PaddleGame::kAimRange;  // host paddle (player 0) to the bottom
+    c.in.pad.aim = PaddleGame::kAimRange;   // client paddle (player 1) to the top
+    l.run(1500);
+    CHECK(paddleOf(h).paddleY[0] > 100.0f && paddleOf(h).paddleY[1] < 30.0f);
+    CHECK(std::fabs(paddleOf(c).paddleY[0] - paddleOf(h).paddleY[0]) < 3.0f);
+    CHECK(std::fabs(paddleOf(c).paddleY[1] - paddleOf(h).paddleY[1]) < 3.0f);
+
+    // Play on with both paddles parked until somebody wins.
+    CHECK(l.runUntil(400000, [&] { return paddleOf(h).phase() == arcade::MatchPhase::MatchEnd; }));
+    CHECK(l.runUntil(3000, [&] { return paddleOf(c).phase() == arcade::MatchPhase::MatchEnd; }));
+    CHECK(paddleOf(c).winner == paddleOf(h).winner);
+    CHECK(paddleOf(c).score[0] == paddleOf(h).score[0] && paddleOf(c).score[1] == paddleOf(h).score[1]);
+
+    const uint8_t firstMatch = h.s.matchId_;
+    h.in.again = true;
+    l.run(500);
+    CHECK(paddleOf(h).phase() == arcade::MatchPhase::MatchEnd);  // one side is not enough
+    c.in.again = true;
+    CHECK(l.runUntil(3000, [&] { return h.s.matchId_ != firstMatch; }));
+    CHECK(l.runUntil(8000, [&] { return bothPlaying(l); }));
+    l.run(300);
+    CHECK(paddleOf(h).score[0] == 0 && paddleOf(h).score[1] == 0);
+    CHECK(paddleOf(c).score[0] == 0 && paddleOf(c).phase() != arcade::MatchPhase::MatchEnd);
 }
 
 static void testGarbageDoesNotCrash() {
@@ -560,6 +703,9 @@ int main() {
     testPairingSimultaneousAnyOrder();
     testPairingUnderLoss();
     testThreeDevices();
+    testOtherGameIgnored();
+    testJoinableGate();
+    testPeerNearbyExpires();
     testSnapshotMatchesHostWithoutLoss();
     testSnapshotConvergesUnderLoss();
     testMatchFlowAndRematch(0.0f, 0, 0);
@@ -567,6 +713,8 @@ int main() {
     testMatchEndWithoutRematchStays();
     testClientJumpSurvivesLoss();
     testClientFireReachesHost();
+    testEarlyPressesAreNotJumps();
+    testTurnTimeoutReachesClient();
     testLinkLostAndRecover();
     testTimeout();
     testPeerLeaves(false, 0.0f);
@@ -574,6 +722,8 @@ int main() {
     testPeerLeaves(false, 0.3f);
     testRtt();
     testIgnoresForeignAndStalePackets();
+    testPaddleOverNetwork(0.0f, 0, 0);
+    testPaddleOverNetwork(0.2f, 15, 20);
     testGarbageDoesNotCrash();
     std::printf(failures ? "%d FAILURES\n" : "ALL PASSED\n", failures);
     return failures ? 1 : 0;

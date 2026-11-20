@@ -1,27 +1,38 @@
-#include "net_session.h"
+#include "net/net_session.h"
 
 #include <math.h>
 #include <string.h>
+
+#include "core/platform.h"
+#include "core/wire.h"
+
+using arcade::q8;
+using arcade::Reader;
+using arcade::Writer;
 
 namespace net {
 
 namespace {
 
 constexpr uint8_t kMagic = 0xD7;
-constexpr uint8_t kVersion = 1;
+constexpr uint8_t kVersion = 3;  // session protocol; the game has its own protoVer
+constexpr uint8_t kRoom = 0;     // reserved: devices only pair inside the same room (a future room code)
 
 enum : uint8_t { PT_HELLO = 1, PT_OFFER, PT_ACCEPT, PT_INPUT, PT_SNAP, PT_BYE };
 
 constexpr uint32_t kHelloMs = 120;
 constexpr uint32_t kOfferMs = 100;
 constexpr uint32_t kPairTimeoutMs = 1500;
+constexpr uint32_t kPeerSeenMs = 1500;
 constexpr uint32_t kLostMs = 600;
 constexpr uint32_t kTimeoutMs = 5000;
 constexpr uint32_t kSendMs = 15;
 constexpr float kReadyMs = 1000.0f;
 constexpr float kCountdownSec = 3.0f;
-constexpr float kTick = 1.0f / 60.0f;
 constexpr int kByeCopies = 4;
+
+// HELLO flag bits.
+constexpr uint8_t kHelloJoinable = 1;
 
 // Snapshot flag bits.
 constexpr uint8_t kFlagHostAgain = 1;
@@ -29,63 +40,10 @@ constexpr uint8_t kFlagClientAgain = 2;
 constexpr uint8_t kFlagEcho = 4;
 
 // Input flag bits.
-constexpr uint8_t kInCharge = 1;
-constexpr uint8_t kInJumpHeld = 2;
+constexpr uint8_t kInA = 1;
+constexpr uint8_t kInB = 2;
 constexpr uint8_t kInAgain = 4;
 constexpr uint8_t kInEcho = 8;
-
-// Player flag bits.
-constexpr uint8_t kPlItemUsed = 1;
-constexpr uint8_t kPlCharging = 2;
-constexpr uint8_t kPlHit = 4;
-constexpr uint8_t kPlPowerUp = 8;
-constexpr uint8_t kPlFaceRight = 16;
-
-// Projectile flag bits.
-constexpr uint8_t kPrExploding = 1;
-constexpr uint8_t kPrFuseOn = 2;
-
-struct Writer {
-    uint8_t buf[250];
-    size_t n = 0;
-
-    void u8(uint8_t v) { if (n < sizeof(buf)) buf[n++] = v; }
-    void u16(uint16_t v) { u8(v & 0xFF); u8(v >> 8); }
-    void i16(int16_t v) { u16(static_cast<uint16_t>(v)); }
-    void u32(uint32_t v) { u16(v & 0xFFFF); u16(v >> 16); }
-    void f32(float v) { uint32_t b; memcpy(&b, &v, 4); u32(b); }
-};
-
-struct Reader {
-    const uint8_t* p;
-    size_t len;
-    size_t pos = 0;
-    bool ok = true;
-
-    Reader(const uint8_t* d, size_t n) : p(d), len(n) {}
-    uint8_t u8() {
-        if (pos >= len) { ok = false; return 0; }
-        return p[pos++];
-    }
-    uint16_t u16() { const uint16_t lo = u8(); return lo | (static_cast<uint16_t>(u8()) << 8); }
-    int16_t i16() { return static_cast<int16_t>(u16()); }
-    uint32_t u32() { const uint32_t lo = u16(); return lo | (static_cast<uint32_t>(u16()) << 16); }
-    float f32() { const uint32_t b = u32(); float v; memcpy(&v, &b, 4); return v; }
-};
-
-int16_t q16(float v, float scale) {
-    float s = v * scale;
-    if (s > 32767.0f) s = 32767.0f;
-    if (s < -32768.0f) s = -32768.0f;
-    return static_cast<int16_t>(lroundf(s));
-}
-
-uint8_t q8(float v, float scale) {
-    float s = v * scale;
-    if (s > 255.0f) s = 255.0f;
-    if (s < 0.0f) s = 0.0f;
-    return static_cast<uint8_t>(lroundf(s));
-}
 
 uint32_t mix(uint32_t a, uint32_t b) {
     uint32_t h = a * 2654435761u ^ (b + 0x9E3779B9u + (a << 6) + (a >> 2));
@@ -97,14 +55,19 @@ uint32_t mix(uint32_t a, uint32_t b) {
 
 }  // namespace
 
-void Session::begin(Transport* tx, uint32_t nonce, uint32_t nowMs) {
+void Session::begin(Transport* tx, uint32_t nonce, uint32_t nowMs, const arcade::GameInfo& info,
+                    arcade::IGame* game) {
     *this = Session();
     tx_ = tx;
+    info_ = &info;
+    game_ = game;
     nonce_ = nonce ? nonce : 1u;
     lastUpdate_ = nowMs;
     stateSince_ = nowMs;
     lastSend_ = nowMs - kHelloMs;
 }
+
+bool Session::peerNearby(uint32_t nowMs) const { return peerSeen_ && nowMs - peerSeenMs_ < kPeerSeenMs; }
 
 Status Session::status() const {
     switch (state_) {
@@ -152,11 +115,10 @@ void Session::connect(Role role, uint32_t now) {
 void Session::newMatch(uint32_t now) {
     ++matchId_;
     seed_ = mix(nonce_ ^ (candNonce_ << 1), now + matchId_);
-    game_.begin(GameMode::Versus, seed_);
+    game_->begin(arcade::Mode::Host, seed_);
     myAgain_ = false;
     oppAgain_ = false;
-    remote_.again = false;
-    hostJump_ = false;
+    remoteAgain_ = false;
     accum_ = 0.0f;
     cd_ = 0.0f;
 }
@@ -181,6 +143,11 @@ void Session::sendHello() {
     w.u8(kMagic);
     w.u8(PT_HELLO);
     w.u8(kVersion);
+    w.u8(info_->wireId);
+    w.u8(info_->protoVer);
+    w.u8(info_->maxPlayers);
+    w.u8(kRoom);
+    w.u8(joinable_ ? kHelloJoinable : 0);
     w.u32(nonce_);
     tx_->send(nullptr, w.buf, w.n);
 }
@@ -213,14 +180,15 @@ void Session::sendInput(const LocalInput& in, uint32_t now) {
     w.u16(txSeq_++);
     w.u16(static_cast<uint16_t>(now));
     w.u16(peerTs_);
-    w.i16(q16(in.aimDeg, 100.0f));
+    w.i16(arcade::q16(in.pad.aim, 100.0f));
     uint8_t flags = 0;
-    if (in.charge) flags |= kInCharge;
-    if (in.jumpHeld) flags |= kInJumpHeld;
+    if (in.pad.a) flags |= kInA;
+    if (in.pad.b) flags |= kInB;
     if (myAgain_) flags |= kInAgain;
     if (haveEcho_) flags |= kInEcho;
     w.u8(flags);
-    w.u8(jumpCount_);
+    w.u8(in.pad.bCount);
+    w.u8(in.pad.aCount);
     tx_->send(peer_, w.buf, w.n);
 }
 
@@ -236,14 +204,10 @@ void Session::sendSnapshot(uint32_t now) {
     w.u8(q8(cd_, 10.0f));
     w.u8(matchId_);
     w.u32(seed_);
-    w.u8(static_cast<uint8_t>(game_.phase));
-    w.u8(static_cast<uint8_t>(static_cast<int8_t>(game_.winner)));
-    w.u8(q8(game_.phaseTimer, 100.0f));
-    w.f32(game_.clock());
 
     uint8_t flags = 0;
     if (myAgain_) flags |= kFlagHostAgain;
-    if (remote_.again) flags |= kFlagClientAgain;
+    if (remoteAgain_) flags |= kFlagClientAgain;
     if (haveEcho_) flags |= kFlagEcho;
     w.u8(flags);
 
@@ -253,42 +217,7 @@ void Session::sendSnapshot(uint32_t now) {
     evLast_ = evCur;
     evAcc_ = 0;
 
-    for (const Player& p : game_.players) {
-        w.i16(q16(p.h, 16.0f));
-        w.i16(q16(p.vh, 16.0f));
-        w.i16(q16(p.aimDeg, 100.0f));
-        w.u8(q8(p.power, 255.0f));
-        w.u8(q8(p.hitFlash, 255.0f));
-        w.u8(q8(p.cooldown, 255.0f));
-        w.u8(p.score);
-        w.u8(static_cast<uint8_t>(p.item));
-        uint8_t pf = 0;
-        if (p.itemUsed) pf |= kPlItemUsed;
-        if (p.charging) pf |= kPlCharging;
-        if (p.hit) pf |= kPlHit;
-        if (p.powerDir > 0) pf |= kPlPowerUp;
-        if (p.face > 0) pf |= kPlFaceRight;
-        w.u8(pf);
-    }
-
-    uint8_t count = 0;
-    for (const Projectile& p : game_.proj) count += p.active ? 1 : 0;
-    w.u8(count);
-    for (const Projectile& p : game_.proj) {
-        if (!p.active) continue;
-        uint8_t pf = 0;
-        if (p.exploding) pf |= kPrExploding;
-        if (p.fuseOn) pf |= kPrFuseOn;
-        w.u8(pf);
-        w.u8(static_cast<uint8_t>(static_cast<uint8_t>(p.type) | (p.owner << 4)));
-        w.i16(q16(p.x, 16.0f));
-        w.i16(q16(p.y, 16.0f));
-        w.i16(q16(p.vx, 8.0f));
-        w.i16(q16(p.vy, 8.0f));
-        w.i16(q16(p.rot, 256.0f));
-        w.u8(q8(p.fuse, 100.0f));
-        w.u8(q8(p.blastT, 300.0f));
-    }
+    game_->encode(w);
     tx_->send(peer_, w.buf, w.n);
 }
 
@@ -308,7 +237,8 @@ void Session::parseInput(const uint8_t* d, size_t len, uint32_t now) {
     const uint16_t echo = r.u16();
     const int16_t aim = r.i16();
     const uint8_t flags = r.u8();
-    const uint8_t jumps = r.u8();
+    const uint8_t bCount = r.u8();
+    const uint8_t aCount = r.u8();
     if (!r.ok) return;
 
     lastRxMs_ = now;
@@ -321,11 +251,12 @@ void Session::parseInput(const uint8_t* d, size_t len, uint32_t now) {
     if (flags & kInEcho) noteEcho(echo, now);
 
     heard_ = true;
-    remote_.aim = aim / 100.0f;
-    remote_.charge = (flags & kInCharge) != 0;
-    remote_.jumpHeld = (flags & kInJumpHeld) != 0;
-    remote_.again = (flags & kInAgain) != 0;
-    remote_.jumpCount = jumps;
+    remotePad_.aim = aim / 100.0f;
+    remotePad_.a = (flags & kInA) != 0;
+    remotePad_.b = (flags & kInB) != 0;
+    remotePad_.bCount = bCount;
+    remotePad_.aCount = aCount;
+    remoteAgain_ = (flags & kInAgain) != 0;
 }
 
 void Session::parseSnapshot(const uint8_t* d, size_t len, uint32_t now) {
@@ -340,51 +271,10 @@ void Session::parseSnapshot(const uint8_t* d, size_t len, uint32_t now) {
     const uint8_t cd = r.u8();
     const uint8_t matchId = r.u8();
     const uint32_t seed = r.u32();
-    const uint8_t phase = r.u8();
-    const int8_t winner = static_cast<int8_t>(r.u8());
-    const uint8_t phaseTimer = r.u8();
-    const float clock = r.f32();
     const uint8_t flags = r.u8();
     const uint8_t evCur = r.u8();
     const uint8_t evPrev = r.u8();
-    if (!r.ok || stage > static_cast<uint8_t>(Stage::Playing) || phase > static_cast<uint8_t>(Phase::MatchEnd)) return;
-
-    struct PlayerWire {
-        int16_t h, vh, aim;
-        uint8_t power, hitFlash, cooldown, score, item, flags;
-    } pw[2];
-    for (auto& p : pw) {
-        p.h = r.i16();
-        p.vh = r.i16();
-        p.aim = r.i16();
-        p.power = r.u8();
-        p.hitFlash = r.u8();
-        p.cooldown = r.u8();
-        p.score = r.u8();
-        p.item = r.u8();
-        p.flags = r.u8();
-    }
-    const uint8_t count = r.u8();
-    if (!r.ok || count > cfg::MAX_PROJ) return;
-
-    struct ProjWire {
-        uint8_t flags, typeOwner;
-        int16_t x, y, vx, vy, rot;
-        uint8_t fuse, blastT;
-    } prw[cfg::MAX_PROJ];
-    for (int i = 0; i < count; ++i) {
-        ProjWire& p = prw[i];
-        p.flags = r.u8();
-        p.typeOwner = r.u8();
-        p.x = r.i16();
-        p.y = r.i16();
-        p.vx = r.i16();
-        p.vy = r.i16();
-        p.rot = r.i16();
-        p.fuse = r.u8();
-        p.blastT = r.u8();
-    }
-    if (!r.ok) return;
+    if (!r.ok || stage > static_cast<uint8_t>(Stage::Playing)) return;
 
     lastRxMs_ = now;
     int16_t diff = 1;
@@ -398,60 +288,19 @@ void Session::parseSnapshot(const uint8_t* d, size_t len, uint32_t now) {
     haveEcho_ = true;
     if (flags & kFlagEcho) noteEcho(echo, now);
 
-    if (!haveSnap_ || matchId != matchId_) {
+    const bool fresh = !haveSnap_ || matchId != matchId_;
+    if (fresh) {
         matchId_ = matchId;
         seed_ = seed;
-        view_.begin(GameMode::Versus, seed);
+        game_->begin(arcade::Mode::Client, seed);
         myAgain_ = false;
-        haveSnap_ = true;
     }
+    if (!game_->decode(r)) return;
+    haveSnap_ = true;
 
     stage_ = static_cast<Stage>(stage);
     cd_ = cd / 10.0f;
     oppAgain_ = (flags & kFlagHostAgain) != 0;
-
-    view_.phase = static_cast<Phase>(phase);
-    view_.winner = winner;
-    view_.phaseTimer = phaseTimer / 100.0f;
-    view_.setClock(clock);
-
-    for (int i = 0; i < 2; ++i) {
-        Player& p = view_.players[i];
-        const PlayerWire& w = pw[i];
-        p.h = w.h / 16.0f;
-        p.vh = w.vh / 16.0f;
-        p.aimDeg = w.aim / 100.0f;
-        p.power = w.power / 255.0f;
-        p.hitFlash = w.hitFlash / 255.0f;
-        p.cooldown = w.cooldown / 255.0f;
-        p.score = w.score;
-        p.item = static_cast<ItemType>(w.item <= static_cast<uint8_t>(ItemType::Boomerang) ? w.item : 0);
-        p.itemUsed = (w.flags & kPlItemUsed) != 0;
-        p.charging = (w.flags & kPlCharging) != 0;
-        p.hit = (w.flags & kPlHit) != 0;
-        p.powerDir = (w.flags & kPlPowerUp) ? 1 : -1;
-        p.face = (w.flags & kPlFaceRight) ? 1 : -1;
-        p.feetY = view_.platformY(i) - p.h;
-    }
-
-    for (auto& p : view_.proj) p = Projectile();
-    for (int i = 0; i < count; ++i) {
-        const ProjWire& w = prw[i];
-        Projectile& p = view_.proj[i];
-        p.active = true;
-        p.exploding = (w.flags & kPrExploding) != 0;
-        p.fuseOn = (w.flags & kPrFuseOn) != 0;
-        const uint8_t type = w.typeOwner & 0x0F;
-        p.type = static_cast<ItemType>(type <= static_cast<uint8_t>(ItemType::Boomerang) ? type : 0);
-        p.owner = (w.typeOwner >> 4) & 1;
-        p.x = w.x / 16.0f;
-        p.y = w.y / 16.0f;
-        p.vx = w.vx / 8.0f;
-        p.vy = w.vy / 8.0f;
-        p.rot = w.rot / 256.0f;
-        p.fuse = w.fuse / 100.0f;
-        p.blastT = w.blastT / 300.0f;
-    }
 
     if (!first) pendingEv_ |= diff == 1 ? evCur : static_cast<uint32_t>(evCur | evPrev);
 }
@@ -465,8 +314,19 @@ void Session::onReceive(const uint8_t* mac, const uint8_t* data, size_t len, uin
     switch (type) {
         case PT_HELLO: {
             const uint8_t ver = r.u8();
+            const uint8_t gameId = r.u8();
+            const uint8_t proto = r.u8();
+            const uint8_t maxPlayers = r.u8();
+            const uint8_t room = r.u8();
+            const uint8_t flags = r.u8();
             const uint32_t nonce = r.u32();
-            if (!r.ok || ver != kVersion || state_ != State::Searching || nonce >= nonce_) break;
+            if (!r.ok || ver != kVersion || gameId != info_->wireId || proto != info_->protoVer ||
+                maxPlayers != info_->maxPlayers || room != kRoom) {
+                break;
+            }
+            peerSeen_ = true;
+            peerSeenMs_ = now;
+            if (state_ != State::Searching || !joinable_ || !(flags & kHelloJoinable) || nonce >= nonce_) break;
             // The higher nonce hosts, so the host reacts to the lower device's hello.
             memcpy(peer_, mac, 6);
             candNonce_ = nonce;
@@ -482,7 +342,7 @@ void Session::onReceive(const uint8_t* mac, const uint8_t* data, size_t len, uin
             const uint32_t hostNonce = r.u32();
             const uint32_t clientNonce = r.u32();
             const uint16_t sid = r.u16();
-            if (!r.ok || state_ != State::Searching || clientNonce != nonce_ || hostNonce <= nonce_) break;
+            if (!r.ok || state_ != State::Searching || !joinable_ || clientNonce != nonce_ || hostNonce <= nonce_) break;
             memcpy(peer_, mac, 6);
             candNonce_ = hostNonce;
             sid_ = sid;
@@ -569,15 +429,14 @@ uint32_t Session::update(uint32_t now, const LocalInput& in) {
 
 uint32_t Session::updateHost(uint32_t now, float dt, const LocalInput& in) {
     uint32_t ev = 0;
-    if (in.jump) hostJump_ = true;
-    const bool matchOver = stage_ == Stage::Playing && game_.phase == Phase::MatchEnd;
+    const bool matchOver = stage_ == Stage::Playing && game_->phase() == arcade::MatchPhase::MatchEnd;
     if (matchOver && in.again) myAgain_ = true;
 
     if (!linkLost_) {
+        const PadInput pads[2] = {in.pad, remotePad_};
         switch (stage_) {
             case Stage::Ready:
-                remote_.seenJump = remote_.jumpCount;
-                hostJump_ = false;
+                game_->prime(pads);
                 if (heard_) {
                     readyMs_ += dt * 1000.0f;
                     if (readyMs_ >= kReadyMs) {
@@ -587,8 +446,7 @@ uint32_t Session::updateHost(uint32_t now, float dt, const LocalInput& in) {
                 }
                 break;
             case Stage::Countdown:
-                remote_.seenJump = remote_.jumpCount;
-                hostJump_ = false;
+                game_->prime(pads);
                 cd_ -= dt;
                 if (cd_ <= 0.0f) {
                     cd_ = 0.0f;
@@ -598,23 +456,13 @@ uint32_t Session::updateHost(uint32_t now, float dt, const LocalInput& in) {
                 break;
             case Stage::Playing:
                 accum_ += dt;
-                while (accum_ >= kTick) {
-                    accum_ -= kTick;
-                    PlayerInput pi[2];
-                    pi[0].aimDeg = in.aimDeg;
-                    pi[0].charge = in.charge;
-                    pi[0].jump = hostJump_;
-                    pi[0].jumpHeld = in.jumpHeld;
-                    hostJump_ = false;
-                    pi[1].aimDeg = remote_.aim;
-                    pi[1].charge = remote_.charge;
-                    pi[1].jumpHeld = remote_.jumpHeld;
-                    pi[1].jump = remote_.jumpCount != remote_.seenJump;
-                    remote_.seenJump = remote_.jumpCount;
-                    ev |= game_.update(kTick, pi);
+                while (accum_ >= platform::kTick) {
+                    accum_ -= platform::kTick;
+                    const PadInput live[2] = {in.pad, remotePad_};
+                    ev |= game_->step(platform::kTick, live);
                 }
-                if (game_.phase == Phase::MatchEnd) {
-                    oppAgain_ = remote_.again;
+                if (game_->phase() == arcade::MatchPhase::MatchEnd) {
+                    oppAgain_ = remoteAgain_;
                     if (myAgain_ && oppAgain_) {
                         newMatch(now);
                         stage_ = Stage::Countdown;
@@ -634,19 +482,12 @@ uint32_t Session::updateHost(uint32_t now, float dt, const LocalInput& in) {
 }
 
 uint32_t Session::updateClient(uint32_t now, const LocalInput& in) {
-    if (in.jump) ++jumpCount_;
-    if (haveSnap_ && view_.phase == Phase::MatchEnd && in.again) myAgain_ = true;
+    if (haveSnap_ && game_->phase() == arcade::MatchPhase::MatchEnd && in.again) myAgain_ = true;
     if (now - lastSend_ >= kSendMs) {
         lastSend_ = now;
         sendInput(in, now);
     }
-    if (haveSnap_ && stage_ == Stage::Playing) {
-        // Our own aim line follows the local sensor immediately instead of waiting for the host.
-        float a = in.aimDeg;
-        if (a < cfg::AIM_MIN_DEG) a = cfg::AIM_MIN_DEG;
-        if (a > cfg::AIM_MAX_DEG) a = cfg::AIM_MAX_DEG;
-        view_.players[1].aimDeg = a;
-    }
+    if (haveSnap_ && stage_ == Stage::Playing) game_->localInput(1, in.pad);
     const uint32_t ev = pendingEv_;
     pendingEv_ = 0;
     return ev;

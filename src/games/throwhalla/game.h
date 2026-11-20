@@ -5,7 +5,9 @@
 #include "config.h"
 
 enum class ItemType : uint8_t { None, Knife, Axe, Bomb, Boomerang };
-enum class GameMode : uint8_t { Training, Versus };
+// Solo: the opponent never moves and counts as "already thrown"; the player throws once per round, rounds repeat
+// forever and every hit on the opponent scores a point. Versus: two players, first to WIN_SCORE.
+enum class GameMode : uint8_t { Solo, Versus };
 enum class Phase : uint8_t { Playing, RoundEnd, MatchEnd };
 
 enum GameEvent : uint32_t {
@@ -70,13 +72,17 @@ public:
     void begin(GameMode mode, uint32_t seed);
     uint32_t update(float dt, const PlayerInput in[2]);
 
-    GameMode mode = GameMode::Training;
+    GameMode mode = GameMode::Solo;
     Phase phase = Phase::Playing;
     WorldOptions world;
     Player players[2];
     Projectile proj[cfg::MAX_PROJ];
     int winner = -1;
     float phaseTimer = 0.0f;
+    float turnTimer = 0.0f;  // seconds since the round started (Versus turn timeout)
+
+    // Seconds until an unthrown player forfeits; only meaningful in Versus while Playing.
+    float turnLeft() const;
 
     // World clock; online clients copy it from the host so platforms and obstacles line up.
     float clock() const { return time_; }
@@ -116,7 +122,6 @@ private:
     bool bounceOffPlayers(Projectile& p, float radius, float rest);
     void detonate(Projectile& p);
     void checkHits(Projectile& p);
-    bool anyHit() const;
     bool anyProjectile() const;
     void finishRound();
 };

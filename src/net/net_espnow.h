@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "net_session.h"
+#include "net/net_session.h"
 
 // ESP-NOW radio glue for net::Session. Receive callbacks run on the Wi-Fi task, so packets are queued
 // and handed to the main loop through poll().

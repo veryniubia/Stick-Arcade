@@ -2,7 +2,8 @@
 
 usage: python shot.py COM9 out_prefix step [step ...]
 Steps are sent in order. A step is either
-  <key>[:<seconds>]   send the key (g,m,f,i,j,1-4) then wait,
+  <key>[:<seconds>]   send the key then wait. Keys: v/V open game 0/1 (waiting screen), g/G open and go solo,
+                      a/o press A/B, x shake twice (opens EXIT?), m launcher, f charge, j jump, i/1-4 Throwhalla items
   @<name>             take a screenshot saved as <out_prefix>_<name>.png
 """
 import sys

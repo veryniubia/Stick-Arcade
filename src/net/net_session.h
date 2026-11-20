@@ -3,10 +3,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "game.h"
+#include "core/game_iface.h"
+#include "core/pad.h"
 
-// Online versus session: pairing, host-authoritative simulation and state snapshots.
-// Hardware independent: packets go through a Transport, time is passed in by the caller.
+// Online session for one game: pairing, host-authoritative simulation and state snapshots.
+// Game independent (the game plugs in through arcade::IGame) and hardware independent: packets go through a
+// Transport and the caller passes the time in.
 namespace net {
 
 class Transport {
@@ -21,26 +23,31 @@ enum class Role : uint8_t { None, Host, Client };
 enum class Status : uint8_t { Searching, Ready, Countdown, Playing, LinkLost, PeerLeft, TimedOut };
 
 struct LocalInput {
-    float aimDeg = 0.0f;
-    bool charge = false;
-    bool jump = false;      // button B pressed since the previous call
-    bool jumpHeld = false;
-    bool again = false;     // button A pressed since the previous call (rematch request at match end)
+    PadInput pad;
+    bool again = false;  // A pressed since the previous call (rematch request at match end)
 };
 
 class Session {
 public:
-    void begin(Transport* tx, uint32_t nonce, uint32_t nowMs);
+    // `game` is the one game object of this device: the host steps it, the client only decodes snapshots into it.
+    void begin(Transport* tx, uint32_t nonce, uint32_t nowMs, const arcade::GameInfo& info, arcade::IGame* game);
     void onReceive(const uint8_t* mac, const uint8_t* data, size_t len, uint32_t nowMs);
-    // Call every frame. Returns the game events (EV_*) to play sounds for.
+    // Call every frame. Returns the game events to play sounds for.
     uint32_t update(uint32_t nowMs, const LocalInput& in);
     // Tells the peer we are leaving.
     void leave();
 
+    // While not joinable the session keeps announcing itself and notices other players (peerNearby) but does
+    // not pair. Solo play turns it on when the user accepts an opponent.
+    void setJoinable(bool on) { joinable_ = on; }
+    bool joinable() const { return joinable_; }
+    // A device running the same game and protocol announced itself in the last second and a half.
+    bool peerNearby(uint32_t nowMs) const;
+
     Status status() const;
     Role role() const { return role_; }
     int localIndex() const { return role_ == Role::Client ? 1 : 0; }
-    const Game& game() const { return role_ == Role::Client ? view_ : game_; }
+    arcade::IGame& game() const { return *game_; }
     float countdownSec() const { return cd_; }
     int rttMs() const { return rtt_; }  // -1 until measured
     bool myAgain() const;
@@ -50,15 +57,8 @@ private:
     enum class State : uint8_t { Searching, Offering, Accepting, Connected, Closed };
     enum class Stage : uint8_t { Ready, Countdown, Playing };
 
-    struct Remote {
-        float aim = 0.0f;
-        bool charge = false;
-        bool jumpHeld = false;
-        bool again = false;
-        uint8_t jumpCount = 0;
-        uint8_t seenJump = 0;
-    };
-
+    const arcade::GameInfo* info_ = nullptr;
+    arcade::IGame* game_ = nullptr;
     Transport* tx_ = nullptr;
     uint32_t nonce_ = 1;
     uint32_t candNonce_ = 0;
@@ -67,6 +67,9 @@ private:
     Status closeReason_ = Status::PeerLeft;
     uint8_t peer_[6] = {};
     uint16_t sid_ = 0;
+    bool joinable_ = true;
+    bool peerSeen_ = false;
+    uint32_t peerSeenMs_ = 0;
 
     uint32_t lastUpdate_ = 0;
     uint32_t lastSend_ = 0;
@@ -88,10 +91,9 @@ private:
     bool oppAgain_ = false;
 
     // Host side.
-    Game game_;
-    Remote remote_;
+    PadInput remotePad_;
+    bool remoteAgain_ = false;
     bool heard_ = false;
-    bool hostJump_ = false;
     float readyMs_ = 0.0f;
     float accum_ = 0.0f;
     uint32_t evAcc_ = 0;
@@ -99,9 +101,7 @@ private:
     uint16_t snapSeq_ = 0;
 
     // Client side.
-    Game view_;
     bool haveSnap_ = false;
-    uint8_t jumpCount_ = 0;
     uint32_t pendingEv_ = 0;
 
     void toSearching(uint32_t now);

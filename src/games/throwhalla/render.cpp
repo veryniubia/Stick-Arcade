@@ -1,12 +1,21 @@
-#include "render.h"
+#include "games/throwhalla/render.h"
 
 #include <math.h>
 
+#include "core/display.h"
+
 namespace render {
 
-M5Canvas canvas(&M5.Display);
-
 namespace {
+
+// Drawing target of the figure/line helpers; the knock-down animation redirects it to a small sprite,
+// everything else draws into the back buffer of the display.
+lgfx::LovyanGFX* g_override = nullptr;
+lgfx::LovyanGFX& dst() {
+    if (g_override) return *g_override;
+    return display::canvas();
+}
+#define canvas (dst())
 
 constexpr uint16_t kShadowColor = rgb(30, 34, 34);
 constexpr uint16_t kWall = rgb(240, 240, 240);
@@ -25,8 +34,6 @@ constexpr uint16_t kHorn = rgb(244, 238, 216);
 
 bool g_shadowPass = false;
 
-// Drawing target of the figure/line helpers; the knock-down animation redirects it to a small sprite.
-lgfx::LovyanGFX* g_dst = &canvas;
 M5Canvas g_figure(&M5.Display);
 constexpr int kFigureSprite = 34;
 constexpr int kFigureBaseX = 17;
@@ -46,7 +53,6 @@ Pt xf(float px, float py, float c, float s, int cx, int cy) {
 }
 
 void thickLine(Pt a, Pt b, uint16_t color, int w) {
-    auto& canvas = *g_dst;
     int n = abs(b.x - a.x);
     if (abs(b.y - a.y) > n) n = abs(b.y - a.y);
     if (n == 0) n = 1;
@@ -196,7 +202,6 @@ void drawItemBody(ItemType type, int cx, int cy, float angle, float scale, bool 
 // ---- viking ----
 
 void drawFigureBody(int x, int by, int dir, int pal, bool hit, bool blink, float armDeg) {
-    auto& canvas = *g_dst;
     uint16_t body = kBodyColor[pal];
     uint16_t shade = kBodyShade[pal];
     if (blink) {
@@ -329,17 +334,26 @@ void drawHud(const Game& g, int local) {
         canvas.setTextColor(kBodyColor[1 - local]);
         canvas.drawString(buf, 205, 127);
     } else {
+        // Solo: hits on the dummy
         snprintf(buf, sizeof(buf), "%d", g.players[0].score);
         canvas.setTextColor(kBodyColor[0]);
         canvas.drawString(buf, 160, 127);
-
-        // Training has spare room in the strip: keep the exit shortcut visible all the time.
         canvas.setTextSize(1);
         canvas.setTextColor(rgb(190, 192, 200));
-        canvas.drawString("HOLD A+B", 207, 123);
-        canvas.drawString("= MENU", 207, 131);
+        canvas.drawString("HITS", 205, 127);
     }
     canvas.setTextSize(1);
+}
+
+// Versus only: in the last seconds of the turn timeout the player who has not thrown yet gets a shrinking bar.
+void drawTurnBar(const Game& g, int local) {
+    if (g.mode != GameMode::Versus || g.phase != Phase::Playing || g.players[local].itemUsed) return;
+    const float left = g.turnLeft();
+    if (left > cfg::TURN_WARN_SEC) return;
+    const int w = static_cast<int>(cfg::SCREEN_W * left / cfg::TURN_WARN_SEC);
+    const bool urgent = left < 2.0f && (static_cast<int>(left * 6.0f) & 1);
+    canvas.fillRect(0, 1, cfg::SCREEN_W, 4, rgb(24, 20, 26));
+    canvas.fillRect(0, 2, w, 2, urgent ? kWhite : rgb(255, 90, 60));
 }
 
 void drawBanner(const Game& g, int local) {
@@ -351,6 +365,7 @@ void drawBanner(const Game& g, int local) {
         if (meHit && oppHit) text = "BOTH!";
         else if (meHit) { text = "OUCH!"; color = rgb(255, 90, 80); }
         else if (oppHit) text = "HIT!";
+        else if (g.mode == GameMode::Solo) { text = "MISS"; color = rgb(190, 192, 200); }
     } else if (g.phase == Phase::MatchEnd) {
         const bool won = g.winner == local;
         text = won ? "YOU WIN" : "YOU LOSE";
@@ -410,14 +425,9 @@ void spawnEffects(const Game& g, float dt) {
 }  // namespace
 
 bool begin() {
-    canvas.setColorDepth(16);
     g_figure.setColorDepth(16);
-    g_figure.createSprite(kFigureSprite, kFigureSprite);
-    g_figure.setPivot(kFigureBaseX, kFigureBaseY);
-    return canvas.createSprite(cfg::SCREEN_W, cfg::SCREEN_H) != nullptr;
+    return g_figure.createSprite(kFigureSprite, kFigureSprite) != nullptr && (g_figure.setPivot(kFigureBaseX, kFigureBaseY), true);
 }
-
-void present() { canvas.pushSprite(0, 0); }
 
 void drawBackground() {
     const int ly = static_cast<int>(cfg::LAVA_Y);
@@ -475,14 +485,14 @@ void drawFigure(int x, int baseY, int dir, int paletteIdx, bool hit, bool blink,
 void drawFallenFigure(int x, int baseY, int dir, int faceDir, int paletteIdx, float progress) {
     const float ease = 1.0f - (1.0f - progress) * (1.0f - progress);
     g_figure.fillScreen(kKeyColor);
-    g_dst = &g_figure;
+    g_override = &g_figure;
     drawFigureBody(kFigureBaseX, kFigureBaseY, faceDir, paletteIdx, true, false, -20.0f);
-    g_dst = &canvas;
+    g_override = nullptr;
     g_figure.pushRotateZoom(&canvas, static_cast<float>(x), baseY - 4.0f * ease, -90.0f * ease * dir, 1.0f, 1.0f,
                             kKeyColor);
 }
 
-void drawGame(const Game& g, int local, float exitHold, bool showHint) {
+void drawGame(const Game& g, int local) {
     const uint32_t now = millis();
     float dt = (now - g_lastMs) / 1000.0f;
     g_lastMs = now;
@@ -529,30 +539,7 @@ void drawGame(const Game& g, int local, float exitHold, bool showHint) {
     }
     drawHud(g, local);
     drawBanner(g, local);
-
-    if (showHint && exitHold <= 0.0f) {
-        canvas.setTextDatum(top_center);
-        canvas.setTextSize(1);
-        canvas.setTextColor(rgb(0, 0, 0));
-        canvas.drawString("HOLD A+B = MENU", cfg::SCREEN_W / 2 + 1, 7);
-        canvas.setTextColor(kWhite);
-        canvas.drawString("HOLD A+B = MENU", cfg::SCREEN_W / 2, 6);
-    }
-
-    if (exitHold > 0.0f) {
-        constexpr int w = 110, h = 34;
-        const int x = (cfg::SCREEN_W - w) / 2;
-        const int y = 38;
-        canvas.fillRoundRect(x, y, w, h, 5, rgb(24, 20, 26));
-        canvas.drawRoundRect(x, y, w, h, 5, kWhite);
-        canvas.setTextDatum(middle_center);
-        canvas.setTextSize(2);
-        canvas.setTextColor(kYellow);
-        canvas.drawString("MENU", cfg::SCREEN_W / 2, y + 12);
-        canvas.setTextSize(1);
-        canvas.drawRect(x + 8, y + 23, w - 16, 7, kWhite);
-        canvas.fillRect(x + 9, y + 24, static_cast<int>((w - 18) * min(1.0f, exitHold)), 5, kYellow);
-    }
+    drawTurnBar(g, local);
 }
 
 }  // namespace render

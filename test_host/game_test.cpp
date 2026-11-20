@@ -1,10 +1,10 @@
-// Host-side rule tests for the game core.
-// Build: g++ -std=c++17 -I src test_host/game_test.cpp src/game.cpp -o test_host/game_test.exe
+// Host-side rule tests for the Throwhalla game core.
+// Build: g++ -std=c++17 -I src test_host/game_test.cpp src/games/throwhalla/game.cpp -o test_host/game_test.exe
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
-#include "game.h"
+#include "games/throwhalla/game.h"
 
 static int failures = 0;
 
@@ -79,10 +79,10 @@ static void testKnifeHit() {
 
 static void testJumpHeightDependsOnHold() {
     Sim tap;
-    tap.g.begin(GameMode::Training, 1);
+    tap.g.begin(GameMode::Solo, 1);
     const float low = tap.jumpApex(0, 0.0f);
     Sim hold;
-    hold.g.begin(GameMode::Training, 1);
+    hold.g.begin(GameMode::Solo, 1);
     const float high = hold.jumpApex(0, 1.0f);
     std::printf("jump apex tap=%.1f hold=%.1f\n", low, high);
     CHECK(low > 5.0f && low < 11.0f);
@@ -224,17 +224,66 @@ static void testMatchLoserOnlyWhenDecided() {
     Game g;
     g.begin(GameMode::Versus, 1);
     CHECK(g.matchLoser() == -1);
-    g.begin(GameMode::Training, 1);
+    g.begin(GameMode::Solo, 1);
     CHECK(g.matchLoser() == -1);
 }
 
-static void testTrainingRefresh() {
+// Solo: the dummy never throws, so the round ends right after the player's throw; rounds go on forever.
+static void testSoloRound() {
     Sim s;
-    s.g.begin(GameMode::Training, 3);
-    const ItemType first = s.g.players[0].item;
+    s.g.begin(GameMode::Solo, 3);
+    CHECK(s.g.players[1].itemUsed && s.g.players[1].item == ItemType::None);
+    s.g.players[0].item = ItemType::Knife;
     s.shoot(0, 45.0f, 0.3f);
+    CHECK(s.g.players[0].itemUsed);
+    CHECK(s.g.phase == Phase::Playing);  // the knife is still flying
+    for (int i = 0; i < 60 * 10 && s.g.phase != Phase::RoundEnd; ++i) s.tick();
+    CHECK(s.g.phase == Phase::RoundEnd);
+    s.run(cfg::ROUND_END_SEC + 0.1f);
+    CHECK(s.g.phase == Phase::Playing);
+    CHECK(!s.g.players[0].itemUsed && s.g.players[0].item != ItemType::None);
+    CHECK(s.g.players[1].itemUsed && s.g.players[1].item == ItemType::None);  // still a dummy
+}
+
+static void testSoloNeverEnds() {
+    Sim s;
+    s.g.begin(GameMode::Solo, 5);
+    s.g.players[0].score = 20;
+    for (int round = 0; round < 8; ++round) {
+        s.g.players[0].item = ItemType::Knife;
+        s.shoot(0, 0.0f, 0.75f);  // straight at the dummy
+        s.run(1.0f);
+        s.run(cfg::ROUND_END_SEC + 0.1f);
+    }
+    CHECK(s.g.phase != Phase::MatchEnd && s.g.winner == -1);
+    CHECK(s.g.players[0].score > 20);  // hits still score
+    CHECK(s.g.matchLoser() == -1);
+}
+
+// Versus: a player who never throws forfeits the throw after TURN_TIMEOUT_SEC so the round cannot hang.
+static void testTurnTimeout() {
+    Sim s;
+    s.g.begin(GameMode::Versus, 7);
+    s.g.players[0].item = ItemType::Knife;
+    s.g.players[1].item = ItemType::Knife;
+    s.shoot(0, 0.0f, 0.2f);  // only player 0 throws
+    s.run(cfg::TURN_TIMEOUT_SEC - 2.0f);
+    CHECK(s.g.phase == Phase::Playing);
+    CHECK(!s.g.players[1].itemUsed);
+    CHECK(s.g.turnLeft() > 0.0f && s.g.turnLeft() < 3.0f);
+    s.run(3.0f);
+    CHECK(s.g.players[1].itemUsed);
+    s.run(cfg::ROUND_END_SEC + 0.3f);
+    CHECK(s.g.phase == Phase::Playing);  // next round started, the clock restarted
+    CHECK(s.g.turnLeft() > cfg::TURN_TIMEOUT_SEC - 2.0f);
+    CHECK(!s.g.players[1].itemUsed);
+}
+
+static void testTurnTimeoutNotInSolo() {
+    Sim s;
+    s.g.begin(GameMode::Solo, 7);
+    s.run(cfg::TURN_TIMEOUT_SEC + 5.0f);
     CHECK(!s.g.players[0].itemUsed);
-    CHECK(s.g.players[0].item != first);
 }
 
 static void testMatchEnd() {
@@ -339,7 +388,7 @@ static void testBombBlastIsSlow() {
 
 static void testBombMinPowerReachesTwoThirds() {
     Sim s;
-    s.g.begin(GameMode::Training, 9);
+    s.g.begin(GameMode::Solo, 9);
     s.g.players[0].item = ItemType::Bomb;
     s.shoot(0, 45.0f, 0.02f);
     float x = -1;
@@ -355,7 +404,7 @@ static void testBombMinPowerReachesTwoThirds() {
 
 static void testBombMaxPowerBouncesBackToCenter() {
     Sim s;
-    s.g.begin(GameMode::Training, 9);
+    s.g.begin(GameMode::Solo, 9);
     s.g.players[0].item = ItemType::Bomb;
     s.shoot(0, 30.0f, 0.75f);
     bool hitRightWall = false;
@@ -375,7 +424,7 @@ static void testBombMaxPowerBouncesBackToCenter() {
 
 static void testAimBackward() {
     Sim s;
-    s.g.begin(GameMode::Training, 9);
+    s.g.begin(GameMode::Solo, 9);
     s.g.players[0].item = ItemType::Knife;
     s.in[0].aimDeg = 180.0f;
     s.run(0.1f);
@@ -399,7 +448,7 @@ static void testBackwardKnifeComesBackAndHitsThrower() {
 
 static void testFaceHysteresis() {
     Sim s;
-    s.g.begin(GameMode::Training, 9);
+    s.g.begin(GameMode::Solo, 9);
     s.in[0].aimDeg = 100.0f;
     s.tick();
     CHECK(s.g.players[0].face == -1);
@@ -413,7 +462,7 @@ static void testFaceHysteresis() {
 
 static void testObstacleRange() {
     Sim s(true, true);
-    s.g.begin(GameMode::Training, 21);
+    s.g.begin(GameMode::Solo, 21);
     float lo = 1e9f, hi = -1e9f;
     for (int i = 0; i < 60 * 12; ++i) {
         s.tick();
@@ -461,7 +510,7 @@ static void testBoomerangReturns() {
 
 static void testAxeDisappears() {
     Sim s(true, true);
-    s.g.begin(GameMode::Training, 13);
+    s.g.begin(GameMode::Solo, 13);
     s.g.players[0].item = ItemType::Axe;
     s.shoot(0, 10.0f, 0.2f);
     s.run(7.0f);
@@ -470,7 +519,7 @@ static void testAxeDisappears() {
 
 static void testMovingPlatformsStayInRange() {
     Sim s(true, true);
-    s.g.begin(GameMode::Training, 21);
+    s.g.begin(GameMode::Solo, 21);
     float lo = 1e9f, hi = -1e9f;
     for (int i = 0; i < 600; ++i) {
         s.tick();
@@ -495,7 +544,10 @@ int main() {
     testSuddenDeath();
     testSuddenDeathLateDamageIgnored();
     testMatchLoserOnlyWhenDecided();
-    testTrainingRefresh();
+    testSoloRound();
+    testSoloNeverEnds();
+    testTurnTimeout();
+    testTurnTimeoutNotInSolo();
     testMatchEnd();
     testKnifeBouncesOffObstacle();
     testBombFallsIntoLava();

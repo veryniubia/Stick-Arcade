@@ -39,10 +39,10 @@ constexpr float JUMP_CUT_V = 110.0f;
 constexpr float JUMP_G = 720.0f;
 
 // Aim angle is relative to the facing direction: 0 = forward, 90 = straight up, 180 = straight backward.
-// The device tilt is multiplied by AIM_GAIN: 30 deg of tilt aims up, 60 deg aims backward.
+// The platform multiplies the device tilt by the AIM setting (default 3.0) before it reaches the game:
+// 30 deg of tilt aims up, 60 deg aims backward.
 constexpr float AIM_MIN_DEG = -30.0f;
 constexpr float AIM_MAX_DEG = 180.0f;
-constexpr float AIM_GAIN = 3.0f;
 constexpr float AIM_FLIP_UP_DEG = 95.0f;    // above this the viking turns around
 constexpr float AIM_FLIP_DOWN_DEG = 85.0f;  // and turns back below this (hysteresis)
 
@@ -66,9 +66,11 @@ constexpr float BOOMERANG_PULL = 255.0f;
 constexpr int WIN_SCORE = 5;
 constexpr float ROUND_END_SEC = 1.2f;
 
-constexpr int MAX_PROJ = 8;
+// Versus only: a player who has not thrown this long after the round started forfeits the throw,
+// so a round cannot hang on an idle opponent. The last TURN_WARN_SEC seconds are shown as a bar.
+constexpr float TURN_TIMEOUT_SEC = 20.0f;
+constexpr float TURN_WARN_SEC = 5.0f;
 
-// IMU: sign of the accelerometer axis that points to the screen's right edge in landscape.
-constexpr float IMU_AIM_SIGN = 1.0f;
+constexpr int MAX_PROJ = 8;
 
 }  // namespace cfg

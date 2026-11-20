@@ -116,13 +116,20 @@ void Game::begin(GameMode m, uint32_t seed) {
     players[0].item = randomItem();
     players[1].item = (m == GameMode::Versus) ? randomItem() : ItemType::None;
     startRound(false);
+    if (m == GameMode::Solo) players[1].itemUsed = true;  // the dummy never throws
 }
 
-// Versus rounds: everybody throws once, the round ends when both have thrown and nothing is flying, and
-// the items are refreshed for the next round. Training keeps its own item handling.
+float Game::turnLeft() const {
+    const float left = cfg::TURN_TIMEOUT_SEC - turnTimer;
+    return left > 0.0f ? left : 0.0f;
+}
+
+// Rounds: everybody throws once, the round ends when everybody has thrown and nothing is flying, and
+// the items are refreshed for the next round.
 void Game::startRound(bool refresh) {
     phase = Phase::Playing;
     phaseTimer = 0.0f;
+    turnTimer = 0.0f;
     for (auto& p : proj) p = Projectile();
     for (auto& p : players) {
         p.hit = false;
@@ -133,12 +140,9 @@ void Game::startRound(bool refresh) {
         p.power = 0.0f;
         p.cooldown = 0.0f;
     }
-    if (mode == GameMode::Versus) {
-        if (refresh) refreshItems();
-        suddenDeath_ = players[0].score == cfg::WIN_SCORE - 1 && players[1].score == cfg::WIN_SCORE - 1;
-    } else {
-        suddenDeath_ = false;
-    }
+    if (refresh) refreshItems();
+    suddenDeath_ = mode == GameMode::Versus && players[0].score == cfg::WIN_SCORE - 1 &&
+                   players[1].score == cfg::WIN_SCORE - 1;
 }
 
 int Game::matchLoser() const {
@@ -156,6 +160,10 @@ void Game::refreshItems() {
     for (auto& p : players) {
         p.item = randomItem();
         p.itemUsed = false;
+    }
+    if (mode == GameMode::Solo) {
+        players[1].item = ItemType::None;
+        players[1].itemUsed = true;
     }
     ev_ |= EV_REFRESH;
 }
@@ -189,13 +197,6 @@ void Game::fire(int idx) {
 
     p.cooldown = cfg::FIRE_COOLDOWN_SEC;
     ev_ |= EV_FIRE;
-
-    if (mode == GameMode::Training) {
-        ItemType next = randomItem();
-        while (next == p.item) next = randomItem();
-        p.item = next;
-        return;
-    }
     p.itemUsed = true;
 }
 
@@ -441,8 +442,6 @@ void Game::updateProjectile(Projectile& p, float dt) {
     checkHits(p);
 }
 
-bool Game::anyHit() const { return players[0].hit || players[1].hit; }
-
 bool Game::anyProjectile() const {
     for (const auto& p : proj) {
         if (p.active) return true;
@@ -472,12 +471,18 @@ uint32_t Game::update(float dt, const PlayerInput in[2]) {
 
     if (phase == Phase::Playing) {
         if (mode == GameMode::Versus) {
-            const bool oneHit = players[0].hit != players[1].hit;
-            const bool bothThrown = players[0].itemUsed && players[1].itemUsed;
-            if ((suddenDeath_ && oneHit) || (bothThrown && !anyProjectile())) finishRound();
-        } else if (anyHit() && !anyProjectile()) {
-            finishRound();
+            turnTimer += dt;
+            if (turnTimer >= cfg::TURN_TIMEOUT_SEC) {
+                for (auto& p : players) {
+                    if (p.itemUsed) continue;
+                    p.itemUsed = true;
+                    p.charging = false;
+                }
+            }
         }
+        const bool oneHit = players[0].hit != players[1].hit;
+        const bool allThrown = players[0].itemUsed && players[1].itemUsed;
+        if ((suddenDeath_ && oneHit) || (allThrown && !anyProjectile())) finishRound();
     } else if (phase == Phase::RoundEnd) {
         phaseTimer -= dt;
         if (phaseTimer <= 0.0f) {
@@ -488,7 +493,7 @@ uint32_t Game::update(float dt, const PlayerInput in[2]) {
                 phase = Phase::MatchEnd;
                 ev_ |= EV_WIN;
             } else {
-                startRound(mode == GameMode::Versus);
+                startRound(true);
             }
         }
     }

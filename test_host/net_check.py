@@ -1,8 +1,10 @@
-"""Dev helper: drive two DEBUG_REMOTE devices over serial for online versus checks.
+"""Dev helper: drive two DEBUG_REMOTE devices over serial for online play checks.
 
 usage: python net_check.py COM8 COM9 step [step ...]
-Steps: v (start versus on both), p<seconds>:<regex> (fire and jump on both until every NET line matches <regex>),
-       <index|*>:<keys> sends keys (0:a presses A on the first device), w<seconds> waits and prints NET/FPS lines,
+Steps: v / V (open game 0 / game 1 on both devices: the waiting screen), g / G (same and go solo),
+       p<seconds>:<regex> (fire and jump on both until every NET line matches <regex>),
+       <index|*>:<keys> sends keys (0:a presses A on the first device, 0:x shakes it, which opens EXIT?),
+       w<seconds> waits and prints NET/PERF/RADIO lines,
        @<prefix> saves screenshots of both devices. Re-opening a port resets the board, so keep one run per scenario.
 """
 import re
@@ -80,9 +82,9 @@ def main():
         sers.append(s)
     time.sleep(0.3)
     for step in steps:
-        if step == "v":
+        if step in ("v", "V", "g", "G"):
             for s in sers:
-                s.write(b"v")
+                s.write(step.encode())
         elif step.startswith("p"):  # p<seconds>:<text>
             secs, _, needle = step[1:].partition(":")
             play_until(sers, float(secs), needle)
