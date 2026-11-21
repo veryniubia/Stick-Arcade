@@ -74,4 +74,11 @@ constexpr float TURN_WARN_SEC = 5.0f;
 
 constexpr int MAX_PROJ = 8;
 
+constexpr int MAX_POWERUPS = 3;
+constexpr float POWERUP_R = 6.0f;
+constexpr float BURGER_SCALE = 1.6f;
+constexpr float LIGHTNING_SPEED = 1.5f;
+constexpr float ICE_SPEED = 0.6f;
+constexpr float SPLIT_ANGLE = 0.20943951f;  // each child diverges by 12 degrees
+
 }  // namespace cfg

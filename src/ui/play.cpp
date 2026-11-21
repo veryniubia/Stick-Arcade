@@ -1,6 +1,7 @@
 #include "ui/play.h"
 
 #include <M5Unified.h>
+#include <algorithm>
 #include <esp_random.h>
 
 #include "core/debug.h"
@@ -41,6 +42,7 @@ int g_lastDigit = -1;
 net::Status g_lastStatus = net::Status::Searching;
 float g_accum = 0.0f;
 
+bool g_bArmed = true;
 bool g_aArmed = false;  // A must have been released once after entering, so the press that opened the game is not a charge
 
 bool g_exitAsk = false;
@@ -58,7 +60,7 @@ arcade::IGame& game() { return *g_gi.game; }
 // charge in progress neither fires nor stops, and presses made for the confirmation never reach the game.
 PadInput makePad() {
     PadInput p;
-    p.aim = debug::aim(input::tiltDeg() * settings::aimGain());
+    p.aim = debug::aim(g_entry->info->portrait ? input::driveTiltDeg() : input::tiltDeg() * settings::aimGain());
     if (g_exitAsk) {
         p.a = g_frozenA;
         p.b = g_frozenB;
@@ -66,7 +68,7 @@ PadInput makePad() {
         p.bCount = g_frozenBCount - g_bSkip;
     } else {
         p.a = (input::aHeld() && g_aArmed) || debug::charging();
-        p.b = input::bHeld() || debug::charging();
+        p.b = (input::bHeld() && g_bArmed) || debug::braking() || (!g_entry->info->portrait && debug::charging());
         p.aCount = input::aCount() - g_aSkip;
         p.bCount = input::bCount() + debug::extraB() - g_bSkip;
     }
@@ -77,7 +79,7 @@ void openExitAsk(uint32_t now) {
     g_exitAsk = true;
     g_exitAskMs = now;
     g_frozenA = (input::aHeld() && g_aArmed) || debug::charging();
-    g_frozenB = input::bHeld() || debug::charging();
+    g_frozenB = (input::bHeld() && g_bArmed) || debug::braking() || (!g_entry->info->portrait && debug::charging());
     g_frozenACount = input::aCount();
     g_frozenBCount = input::bCount() + debug::extraB();
 }
@@ -102,7 +104,12 @@ void pumpRadio(uint32_t now) {
 }
 
 void startSolo() {
+    if (g_entry->info->portrait) g_bArmed = false;
+    display::setPortrait(g_entry->info->portrait);
     game().begin(arcade::Mode::Solo, esp_random());
+    // The B press that selected SOLO belongs to the waiting screen, as do older press counters.
+    const PadInput pads[2] = {makePad(), PadInput()};
+    game().prime(pads);
     g_stage = Stage::Solo;
     g_accum = 0.0f;
     g_joinUntilMs = 0;
@@ -111,6 +118,8 @@ void startSolo() {
 }
 
 void enterOnline() {
+    display::setPortrait(g_entry->info->portrait);
+    display::setPortrait(g_entry->info->portrait);
     g_stage = Stage::Online;
     g_lastDigit = -1;
     g_lastStatus = net::Status::Searching;
@@ -148,16 +157,16 @@ void drawPing(const net::Session& s) {
     c.setTextDatum(top_right);
     c.setTextSize(1);
     c.setTextColor(ui::kBlack);
-    c.drawString(buf, platform::kScreenW - 3, 7);
+    c.drawString(buf, display::width() - 3, 7);
     c.setTextColor(ui::kWhite);
-    c.drawString(buf, platform::kScreenW - 4, 6);
+    c.drawString(buf, display::width() - 4, 6);
 }
 
 // SOLO marker: coloured bar along the top and a tag, so nobody mistakes it for an online match.
 void drawSoloMark() {
     auto& c = display::canvas();
     const uint16_t orange = rgb(255, 150, 40);
-    c.fillRect(0, 0, platform::kScreenW, 3, orange);
+    c.fillRect(0, 0, display::width(), 3, orange);
     c.fillRoundRect(5, 5, 29, 11, 3, orange);
     c.setTextSize(1);
     c.setTextDatum(middle_center);
@@ -166,36 +175,35 @@ void drawSoloMark() {
 }
 
 void drawBox(int w, int h, int y) {
+    w = std::min(w, display::width()-8);
     auto& c = display::canvas();
-    const int x = (platform::kScreenW - w) / 2;
+    w = min(w, display::width() - 8);
+    const int x = (display::width() - w) / 2;
     c.fillRoundRect(x, y, w, h, 5, rgb(24, 20, 26));
     c.drawRoundRect(x, y, w, h, 5, ui::kWhite);
 }
 
 void drawExitAsk() {
     auto& c = display::canvas();
-    drawBox(140, 46, 40);
-    ui::shadowText("EXIT?", platform::kScreenW / 2, 54, 2, ui::yellow());
-    c.setTextSize(1);
-    c.setTextDatum(middle_center);
-    c.setTextColor(ui::kWhite);
-    c.fillRoundRect(62, 71, 14, 12, 3, ui::keyRed());
-    c.drawString("A", 69, 77);
-    c.setTextDatum(middle_left);
-    c.drawString("YES", 80, 77);
-    c.setTextDatum(middle_center);
-    c.fillRoundRect(130, 71, 14, 12, 3, ui::keyBlue());
-    c.drawString("B", 137, 77);
-    c.setTextDatum(middle_left);
-    c.drawString("NO", 148, 77);
+    if (g_entry->info->portrait) {
+        drawBox(126, 54, 91);
+        ui::shadowText("EXIT?", 67, 105, 2, ui::yellow());
+        ui::shadowText("A YES  B NO", 67, 130, 1, ui::kWhite);
+        return;
+    }
+    const int cx=display::width()/2;
+    const int y=display::height()/2-25;
+    drawBox(140, 50, y);
+    ui::shadowText("EXIT?", cx, y+14, 2, ui::yellow());
+    ui::shadowText("A YES   B NO", cx, y+37, 1, ui::kWhite);
 }
 
 void drawLobby() {
     const uint32_t ms = millis();
     g_entry->drawLobby(ms);
-    ui::shadowText(g_entry->name, platform::kScreenW / 2, 20, 2, ui::yellow());
-    ui::shadowText(g_radioOk ? "SEARCHING" : "RADIO OFF", platform::kScreenW / 2, 52, 2, ui::kWhite);
-    if (g_radioOk) drawDots(platform::kScreenW / 2 - 12, 68, ms - g_beginMs);
+    ui::shadowText(g_entry->name, display::width() / 2, 20, 2, ui::yellow());
+    ui::shadowText(g_radioOk ? "SEARCHING" : "RADIO OFF", display::width() / 2, 52, 2, ui::kWhite);
+    if (g_radioOk) drawDots(display::width() / 2 - 12, 68, ms - g_beginMs);
     ui::hintBar("SOLO", "BACK", ms - g_beginMs > kSoloHintMs || !g_radioOk);
 }
 
@@ -205,7 +213,8 @@ void drawOnlineOverlays(uint32_t now) {
     const bool earlyPlay = g_playingSinceMs != 0 && now - g_playingSinceMs < kPingShowMs;
     if (pre || earlyPlay) drawPing(g_session);
 
-    const int cx = platform::kScreenW / 2;
+    const int cx = display::width() / 2;
+    const int overlaySize = g_entry->info->portrait ? 1 : 2;
     switch (st) {
         case net::Status::Ready:
             ui::shadowText("READY", cx, 40, 3, ui::yellow());
@@ -216,20 +225,20 @@ void drawOnlineOverlays(uint32_t now) {
             break;
         }
         case net::Status::LinkLost:
-            ui::shadowText("LINK LOST", cx, 40, 2, ui::red());
+            ui::shadowText("LINK LOST", cx, 40, overlaySize, ui::red());
             break;
         case net::Status::PeerLeft:
-            ui::shadowText("OPP LEFT", cx, 40, 2, ui::red());
+            ui::shadowText("OPP LEFT", cx, 40, overlaySize, ui::red());
             break;
         case net::Status::TimedOut:
-            ui::shadowText("TIMEOUT", cx, 40, 2, ui::red());
+            ui::shadowText("TIMEOUT", cx, 40, overlaySize, ui::red());
             break;
         default:
             break;
     }
     if (st == net::Status::Playing && game().phase() == arcade::MatchPhase::MatchEnd) {
-        ui::shadowText(g_session.myAgain() ? "WAITING" : "A = AGAIN", cx, 70, 2, ui::kWhite);
-        if (g_session.oppAgain() && !g_session.myAgain()) ui::shadowText("OPP READY", cx, 90, 1, ui::green());
+        ui::shadowText(g_session.myAgain() ? "WAITING" : "A = AGAIN", cx, g_entry->info->portrait ? 149 : 70, overlaySize, ui::kWhite);
+        if (g_session.oppAgain() && !g_session.myAgain()) ui::shadowText("OPP READY", cx, g_entry->info->portrait ? 164 : 90, 1, ui::green());
     }
 }
 
@@ -237,16 +246,18 @@ void drawSoloOverlays(uint32_t now) {
     drawSoloMark();
     if (!g_radioOk) return;
     if (g_joinUntilMs != 0) {
-        ui::shadowText("JOINING", platform::kScreenW / 2, 96, 1, ui::green());
+        ui::shadowText("JOINING", display::width() / 2, 96, 1, ui::green());
     } else if (g_session.peerNearby(now) && game().idle(0)) {
-        ui::shadowText("OPP FOUND", platform::kScreenW / 2, 82, 2, ui::green());
-        ui::shadowText("A = JOIN", platform::kScreenW / 2, 100, 1, ui::kWhite);
+        ui::shadowText("OPP FOUND", display::width() / 2, 82, 2, ui::green());
+        ui::shadowText("A = JOIN", display::width() / 2, 100, 1, ui::kWhite);
     }
 }
 
 }  // namespace
 
 void begin(const registry::GameEntry& entry) {
+    debug::releaseControls();
+    display::setPortrait(false);
     g_entry = &entry;
     g_gi = arcade::gameCreate(*entry.info);
     g_stage = Stage::Lobby;
@@ -257,6 +268,7 @@ void begin(const registry::GameEntry& entry) {
     g_lastDigit = -1;
     g_lastStatus = net::Status::Searching;
     g_aArmed = false;
+    g_bArmed = true;
     g_exitAsk = false;
     g_aSkip = g_bSkip = 0;
     g_radioOk = false;
@@ -269,9 +281,12 @@ void begin(const registry::GameEntry& entry) {
 }
 
 void end() {
+    debug::releaseControls();
+    display::setPortrait(false);
     net_espnow::end();
     g_radioOk = false;
     arcade::gameDestroy(g_gi);
+    display::setPortrait(false);
 }
 
 bool update(float dt) {
@@ -281,6 +296,7 @@ bool update(float dt) {
     bool bPress = input::bPressed() || debug::bPress();
     const bool shake = input::shaken() || debug::shake();
     if (!input::aHeld()) g_aArmed = true;
+    if (!input::bHeld()) g_bArmed = true;
 
     pumpRadio(now);
     const bool askWasOpen = g_exitAsk;
@@ -325,6 +341,10 @@ bool update(float dt) {
                 g_session.setJoinable(false);
                 g_joinUntilMs = 0;
             }
+        }
+        if (g_entry->info->portrait && aPress && g_joinUntilMs == 0 && game().phase()==arcade::MatchPhase::MatchEnd && !g_exitAsk) {
+            startSolo();
+            return false;
         }
         g_accum += dt;
         while (g_accum >= platform::kTick) {

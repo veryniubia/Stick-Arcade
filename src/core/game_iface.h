@@ -81,6 +81,7 @@ struct GameInfo {
     size_t arenaBytes;       // extra memory the game wants from its Arena (0 if none)
     IGame* (*create)(void* mem, Arena& arena);  // placement-new into mem
     uint8_t maxPlayers;      // announced in HELLO; the session itself only pairs two devices so far
+    bool portrait;  // lobby remains landscape; gameplay uses a real 135x240 canvas
 };
 
 // One block per running game: [object][arena]. Internal RAM on the device, malloc on a PC.

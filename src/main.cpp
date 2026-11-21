@@ -49,12 +49,15 @@ void debugPoll() {
     while (Serial.available()) {
         const int ch = Serial.read();
         auto& d = debug::g;
-        if (ch == 'v' || ch == 'g' || ch == 'V' || ch == 'G') {
-            const int index = (ch == 'V' || ch == 'G') ? 1 : 0;
+        if (ch == 'v' || ch == 'g' || ch == 'V' || ch == 'G' || ch == 'z' || ch == 'Z') {
+            int index = (ch == 'z' || ch == 'Z' || ch == 'V' || ch == 'G') ? 1 : 0;
+#ifdef ONLY_GAME_BUMPERDUEL
+            index = 0;
+#endif
             if (g_screen == Screen::Play) play::end();
             if (index < registry::count()) {
                 startPlay(index);
-                if (ch == 'g' || ch == 'G') d.bPress = true;  // B on the waiting screen = solo
+                if (ch == 'g' || ch == 'G' || ch == 'Z') d.bPress = true;  // B on the waiting screen = solo
             }
         } else if (ch == 'm') {
             if (g_screen == Screen::Play) play::end();
@@ -65,12 +68,24 @@ void debugPoll() {
         else if (ch == 'a') d.aPress = true;
         else if (ch == 'o') d.bPress = true;
         else if (ch == 'x') d.shake = true;
+        else if (ch == 'e') d.chargeUntil = millis() + 65000;
+        else if (ch == 'q') { d.chargeUntil = 0; d.brakeUntil = 0; }
+        else if (ch == 'R') d.brakeUntil = millis() + 65000;
+        else if (ch == '[') d.aim = -25;
+        else if (ch == ']') d.aim = 25;
+        else if (ch == '=') d.aim = 0;
         else if (ch == 'f') d.chargeUntil = millis() + 450;
         else if (ch == 'j') ++d.extraB;
         else if (ch == 's') d.shot = true;
         else if (ch == 'u') d.aim = 90.0f;
         else if (ch == 'b') d.aim = 180.0f;
         else if (ch == 'n') d.aim = -1000.0f;
+        else if (ch == 'I') {
+            const float imuAim = input::tiltDeg() * settings::aimGain();
+            Serial.printf("IMU ok=%d raw=%.3f tilt=%.3f override=%d aim=%.3f\n",
+                          input::imuOk() ? 1 : 0, input::rawTiltDeg(), input::tiltDeg(),
+                          d.aim > -999.0f ? 1 : 0, debug::aim(imuAim));
+        }
         else if (g_screen == Screen::Play) play::debugKey(static_cast<char>(ch));
     }
 }
@@ -79,6 +94,7 @@ void debugShot() {
     if (!debug::g.shot) return;
     debug::g.shot = false;
     const size_t bytes = platform::kScreenW * platform::kScreenH * 2;
+    Serial.printf("SIZE %d %d\n", display::width(), display::height());
     Serial.write("SHOT", 4);
     Serial.write(static_cast<const uint8_t*>(display::lastFrame()), bytes);
     Serial.flush();

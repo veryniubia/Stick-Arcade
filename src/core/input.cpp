@@ -4,12 +4,14 @@
 #include <math.h>
 
 #include "core/shake.h"
+#include "core/portrait_tilt.h"
 
 namespace {
 
 // Screen's right edge points up: sign of the accelerometer axis along the long side of the device.
 constexpr float kImuAimSign = 1.0f;
 
+arcade::PortraitTilt g_portraitTilt;
 float g_tilt = 0.0f;  // filtered device tilt in degrees
 float g_offset = 0.0f;
 bool g_primed = false;
@@ -34,6 +36,7 @@ namespace input {
 void begin() {
     g_imuOk = M5.Imu.isEnabled();
     g_primed = false;
+    g_portraitTilt.reset();
 }
 
 void update() {
@@ -52,6 +55,7 @@ void update() {
 #endif
     }
 
+    g_portraitTilt.update(ax, ay, az);
     const float along = kImuAimSign * ay;
     const float across = sqrtf(ax * ax + az * az);
     if (along == 0.0f && across == 0.0f) return;
@@ -70,6 +74,7 @@ void update() {
     g_tilt += delta * alpha;
 }
 
+float driveTiltDeg() { return g_portraitTilt.angleDeg(); }
 float rawTiltDeg() { return g_tilt; }
 float tiltDeg() { return g_tilt - g_offset; }
 void setTiltOffset(float deg) { g_offset = deg; }

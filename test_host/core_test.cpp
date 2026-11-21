@@ -1,23 +1,22 @@
 // Host-side tests for the platform pieces that need no hardware: shake detector, settings format, arena,
-// game creation and the PADDLE rules/encoding.
-// Build: g++ -std=c++17 -I src test_host/core_test.cpp src/core/game_instance.cpp src/games/paddle/paddle.cpp
+// game creation and Throwhalla encoding.
+// Build: g++ -std=c++17 -I src test_host/core_test.cpp src/core/game_instance.cpp
 //        src/games/throwhalla/throwhalla.cpp src/games/throwhalla/game.cpp -o test_host/core_test.exe
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+#include <limits>
 
 #include "core/bitmap.h"
 #include "core/settings_data.h"
 #include "core/shake.h"
-#include "games/paddle/paddle.h"
+#include "core/portrait_tilt.h"
 #include "games/throwhalla/throwhalla.h"
 
 // The tests never draw: the view halves of the games are not linked.
 void ThrowhallaGame::draw(int, const arcade::DrawCtx&) {}
 void ThrowhallaGame::sfx(uint32_t) {}
-void PaddleGame::draw(int, const arcade::DrawCtx&) {}
-void PaddleGame::sfx(uint32_t) {}
 
 static int failures = 0;
 
@@ -133,7 +132,7 @@ static void testArena() {
 }
 
 static void testGameInstances() {
-    for (const arcade::GameInfo* info : {&kThrowhallaInfo, &kPaddleInfo}) {
+    for (const arcade::GameInfo* info : {&kThrowhallaInfo}) {
         arcade::GameInstance gi = arcade::gameCreate(*info);
         CHECK(gi.game != nullptr);
         gi.game->begin(arcade::Mode::Solo, 5);
@@ -142,122 +141,6 @@ static void testGameInstances() {
         arcade::gameDestroy(gi);
         CHECK(gi.game == nullptr && gi.block == nullptr);
     }
-    CHECK(kThrowhallaInfo.wireId != kPaddleInfo.wireId);
-}
-
-// ---- PADDLE ----
-
-constexpr float DT = 1.0f / 60.0f;
-
-static void runFor(PaddleGame& g, float sec, const PadInput in[2]) {
-    for (int i = 0; i < static_cast<int>(sec / DT); ++i) g.step(DT, in);
-}
-
-static void testPaddleServeAndMove() {
-    PaddleGame g;
-    g.begin(arcade::Mode::Host, 3);
-    CHECK(g.phase() == arcade::MatchPhase::RoundEnd && g.idle(0));
-    PadInput in[2];
-    in[0].aim = PaddleGame::kAimRange;   // tilted up: paddle goes to the top
-    in[1].aim = -PaddleGame::kAimRange;  // tilted down: paddle goes to the bottom
-    runFor(g, 0.5f, in);
-    CHECK(g.paddleY[0] < 25.0f && g.paddleY[1] > 110.0f);
-    CHECK(g.paddleY[0] >= PaddleGame::kPaddleH / 2 - 0.01f && g.paddleY[1] <= PaddleGame::kFieldH - PaddleGame::kPaddleH / 2 + 0.01f);
-    runFor(g, 1.0f, in);
-    CHECK(g.phase() == arcade::MatchPhase::Playing && g.bvx != 0.0f);
-}
-
-static void testPaddleScoreAndWin() {
-    PaddleGame g;
-    g.begin(arcade::Mode::Host, 3);
-    PadInput in[2];
-    // Nobody moves the paddles to the ball's side: the ball leaves the field and somebody scores.
-    int guard = 0;
-    while (g.phase() != arcade::MatchPhase::MatchEnd && guard++ < 60 * 400) {
-        in[0].aim = -PaddleGame::kAimRange;  // paddles parked at the bottom
-        in[1].aim = -PaddleGame::kAimRange;
-        g.step(DT, in);
-        if (g.by > 60.0f) g.by = 20.0f;  // keep the ball clear of the parked paddles
-    }
-    CHECK(g.phase() == arcade::MatchPhase::MatchEnd);
-    CHECK(g.winner == 0 || g.winner == 1);
-    CHECK(g.score[g.winner] == PaddleGame::kWinScore);
-    const uint8_t s0 = g.score[0], s1 = g.score[1];
-    runFor(g, 2.0f, in);
-    CHECK(g.score[0] == s0 && g.score[1] == s1);  // the match stays finished
-}
-
-static void testPaddleBounce() {
-    PaddleGame g;
-    g.begin(arcade::Mode::Host, 1);
-    PadInput in[2];
-    runFor(g, 1.3f, in);  // serve
-    g.bx = PaddleGame::kPaddleX[0] + 20.0f;
-    g.by = g.paddleY[0];
-    g.bvx = -150.0f;
-    g.bvy = 0.0f;
-    uint32_t ev = 0;
-    for (int i = 0; i < 30; ++i) ev |= g.step(DT, in);
-    CHECK(ev & PaddleGame::EV_PADDLE);
-    CHECK(g.bvx > 150.0f);  // returned, and a little faster
-    CHECK(g.score[0] == 0 && g.score[1] == 0);
-}
-
-static void testPaddleSolo() {
-    PaddleGame g;
-    g.begin(arcade::Mode::Solo, 4);
-    PadInput in[2];
-    runFor(g, 1.3f, in);
-    // Right side is a wall: the ball comes back by itself.
-    g.bx = 200.0f;
-    g.by = 60.0f;
-    g.bvx = 200.0f;
-    g.bvy = 0.0f;
-    for (int i = 0; i < 20; ++i) g.step(DT, in);
-    CHECK(g.bvx < 0.0f);
-    // A rally counts returns of the left paddle; missing resets it but keeps the best.
-    g.rally = 6;
-    g.bx = 5.0f;
-    g.by = 120.0f;
-    g.bvx = -100.0f;
-    g.bvy = 0.0f;
-    g.paddleY[0] = 20.0f;
-    in[0].aim = PaddleGame::kAimRange;
-    for (int i = 0; i < 40; ++i) g.step(DT, in);
-    CHECK(g.rally == 0 && g.score[0] == 6);
-    CHECK(g.phase() != arcade::MatchPhase::MatchEnd);
-}
-
-static void testPaddleEncoding() {
-    PaddleGame a;
-    a.begin(arcade::Mode::Host, 9);
-    PadInput in[2];
-    in[0].aim = 20.0f;
-    in[1].aim = -35.0f;
-    runFor(a, 3.0f, in);
-    arcade::Writer w;
-    a.encode(w);
-    CHECK(w.n < 40);
-
-    PaddleGame b;
-    b.begin(arcade::Mode::Client, 9);
-    arcade::Reader r(w.buf, w.n);
-    CHECK(b.decode(r));
-    CHECK(b.phase() == a.phase() && b.score[0] == a.score[0] && b.score[1] == a.score[1]);
-    CHECK(std::fabs(b.bx - a.bx) < 0.1f && std::fabs(b.by - a.by) < 0.1f);
-    CHECK(std::fabs(b.paddleY[0] - a.paddleY[0]) < 0.1f && std::fabs(b.paddleY[1] - a.paddleY[1]) < 0.1f);
-
-    // A truncated or invalid snapshot must not change anything.
-    PaddleGame c;
-    c.begin(arcade::Mode::Client, 9);
-    const float bx = c.bx;
-    arcade::Reader shortR(w.buf, w.n - 3);
-    CHECK(!c.decode(shortR) && c.bx == bx);
-    uint8_t bad[40];
-    std::memcpy(bad, w.buf, w.n);
-    bad[0] = 9;  // no such phase
-    arcade::Reader badR(bad, w.n);
-    CHECK(!c.decode(badR) && c.bx == bx);
 }
 
 static void testThrowhallaEncoding() {
@@ -273,15 +156,30 @@ static void testThrowhallaEncoding() {
     for (auto& p : g.proj) {
         p.active = true;
         p.type = ItemType::Knife;
+        p.scale = 2.56f;
+        p.speedScale = 0.9f;
+        p.hitPlayers = 2;
     }
+    g.powerups[0] = {PowerupType::Burger, 80, 30};
+    g.powerups[1] = {PowerupType::Split, 120, 55};
+    g.powerups[2] = {PowerupType::Ice, 160, 75};
     arcade::Writer w;
     a.encode(w);
-    CHECK(w.n < 175);
+    CHECK(w.n + 21 <= arcade::kMaxPacket);
     arcade::Reader r(w.buf, w.n);
     CHECK(b.decode(r));
     CHECK(b.core().players[0].hitSources == 3 && b.core().players[0].hitSerial == 2);
     CHECK(b.core().players[1].score == 2);
     CHECK(std::fabs(b.core().players[0].hitFlash - 0.85f) < 0.005f);
+    CHECK(r.pos == w.n);
+    for (const auto& p : b.core().proj) {
+        CHECK(std::fabs(p.scale - 2.56f) < .011f && std::fabs(p.speedScale - .9f) < .011f);
+        CHECK(p.hitPlayers == 2);
+    }
+    for (int i = 0; i < cfg::MAX_POWERUPS; ++i) {
+        CHECK(b.core().powerups[i].type == g.powerups[i].type);
+        CHECK(b.core().powerups[i].x == g.powerups[i].x && b.core().powerups[i].y == g.powerups[i].y);
+    }
     for (size_t n = 0; n < w.n; ++n) {
         arcade::Reader cut(w.buf, n);
         CHECK(!b.decode(cut));
@@ -333,18 +231,53 @@ static void testBitmapDecode() {
     CHECK(pixels == 6 && ok);
 }
 
+// Same screen rotation must have the same reference regardless of starting pose or fore/aft pitch.
+static void testPortraitTilt() {
+    constexpr float radians = .01745329252f;
+    auto sample = [&](arcade::PortraitTilt& t, float roll, float pitch, float gravity = 1.f) {
+        t.update(std::sin(roll*radians)*std::cos(pitch*radians)*gravity,
+                 std::cos(roll*radians)*std::cos(pitch*radians)*gravity,
+                 std::sin(pitch*radians)*gravity);
+    };
+    auto error = [&](float a, float b) { return std::fabs(std::remainder(a-b,360.f)); };
+    for (float initial : {-160.f,-30.f,0.f,65.f,170.f}) {
+        for (float pitch : {-65.f,-30.f,0.f,30.f,65.f}) {
+            arcade::PortraitTilt t;
+            sample(t,initial,pitch);
+            CHECK(error(t.angleDeg(),initial)<.001f); // first pose is measured, never subtracted as zero
+            for (int n=0;n<50;++n) sample(t,15,pitch,.9f);
+            CHECK(error(t.angleDeg(),15)<.16f);
+            for (int n=0;n<50;++n) sample(t,-22.5f,-pitch,1.1f);
+            CHECK(error(t.angleDeg(),-22.5f)<.16f);
+        }
+    }
+    arcade::PortraitTilt t;
+    sample(t,179,0); sample(t,-179,0);
+    CHECK(std::fabs(t.angleDeg())>179); // circular filtering must not sweep through zero
+    for(int n=0;n<50;++n)sample(t,-179,0);
+    CHECK(error(t.angleDeg(),-179)<.16f);
+    float before=t.angleDeg();
+    for(int n=0;n<30;++n)sample(t,45,89);
+    CHECK(t.angleDeg()==before); // nearly horizontal: hold the last reliable heading
+    sample(t,45,73); CHECK(t.angleDeg()==before); // hysteresis: not enough projection to resume
+    sample(t,45,60); CHECK(error(t.angleDeg(),45)<.001f);
+    before=t.angleDeg();
+    t.update(0,0,0);t.update(0,0,1);
+    t.update(std::numeric_limits<float>::quiet_NaN(),0,1);
+    t.update(0,1,std::numeric_limits<float>::infinity());
+    t.update(2,0,0);CHECK(t.angleDeg()==before); // shaking/invalid samples cannot redefine the angle
+    t.reset();t.update(0,0,1);CHECK(t.angleDeg()==0);
+    sample(t,25,35);CHECK(error(t.angleDeg(),25)<.001f);
+}
+
 int main() {
+    testPortraitTilt();
     testThrowhallaEncoding();
     testBitmapDecode();
     testShake();
     testSettingsCodec();
     testArena();
     testGameInstances();
-    testPaddleServeAndMove();
-    testPaddleScoreAndWin();
-    testPaddleBounce();
-    testPaddleSolo();
-    testPaddleEncoding();
     std::printf(failures ? "%d FAILURES\n" : "ALL PASSED\n", failures);
     return failures ? 1 : 0;
 }

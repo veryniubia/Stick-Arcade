@@ -11,6 +11,7 @@ void update();
 // Device tilt in degrees: elevation of the screen's right edge above the horizontal plane, filtered,
 // relative to the calibrated level pose.
 float tiltDeg();
+float driveTiltDeg();             // fixed-reference screen-plane rotation; holds last angle near horizontal
 float rawTiltDeg();               // same without the calibration offset
 void setTiltOffset(float deg);    // pose that counts as level
 bool imuOk();

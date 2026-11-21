@@ -13,10 +13,16 @@ def decode(raw):
     state = {"phase": raw[0], "winner": struct.unpack_from("b", raw, 1)[0], "players": [], "proj": []}
     for i in range(2):
         v = struct.unpack_from("<hhhBBBBBBBB", raw, 8 + 14 * i)
-        state["players"].append(dict(score=v[6], sources=v[7], serial=v[8], flash=v[4], flags=v[10]))
+        state["players"].append(dict(aim=v[2]/100, score=v[6], sources=v[7], serial=v[8], flash=v[4], flags=v[10]))
     for i in range(raw[36]):
-        v = struct.unpack_from("<BBhhhhhBB", raw, 37 + i * 14)
-        state["proj"].append(dict(owner=v[1] >> 4, x=v[2] / 16, vx=v[4] / 8))
+        v = struct.unpack_from("<BBhhhhhBBBBB", raw, 37 + i * 17)
+        state["proj"].append(dict(owner=v[1] >> 4, type=v[1] & 15, flags=v[0],
+                                  x=v[2] / 16, y=v[3] / 16, vx=v[4] / 8, vy=v[5] / 8,
+                                  fuse=v[7] / 100, blast=v[8] / 300,
+                                  scale=v[9] / 50, speed=v[10] / 50, hit_players=v[11]))
+    offset = 37 + raw[36] * 17
+    state['powerups'] = [dict(zip(('type', 'x', 'y'), struct.unpack_from('<BBB', raw, offset + i*3))) for i in range(3)]
+    state['world'] = raw[offset + 9]
     return state
 
 
@@ -78,7 +84,13 @@ def main():
             by_owner = {p["owner"]: p for p in st["proj"]}
             assert by_owner[0]["vx"] < 0 < by_owner[1]["vx"], st
         shots("collision")
-        drain(1.5)
+        # The two real knives keep falling after the collision screenshot and can
+        # hurt a player later. Start a fresh paired match before testing blast damage.
+        for ser in sers:
+            ser.write(b"q=kv")
+        drain(7)
+        assert all("st=PLAY" in latest.get(i, "") for i in range(2)), latest
+        host = next(i for i in range(2) if "role=1 " in latest[i])
         sers[host].write(b"h")
         drain(0.06)
         first = snapshot("first_hit")
@@ -151,6 +163,7 @@ def main():
         (out / "serial.log").write_text("\n".join(log), encoding="utf-8")
         (out / "states.json").write_text(json.dumps(saved, indent=2), encoding="utf-8")
         for ser in sers:
+            ser.write(b"qkn")  # restore live IMU even when an assertion fails
             ser.close()
 
 

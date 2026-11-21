@@ -31,6 +31,7 @@ float clampAim(float a) {
 }  // namespace
 
 void ThrowhallaGame::begin(Mode mode, uint32_t seed) {
+    g_.world = WorldOptions();
     g_.begin(mode == Mode::Solo ? GameMode::Solo : GameMode::Versus, seed);
     primed_[0] = primed_[1] = false;
 }
@@ -118,7 +119,16 @@ void ThrowhallaGame::encode(Writer& w) const {
         w.i16(q16(p.rot, 256.0f));
         w.u8(q8(p.fuse, 100.0f));
         w.u8(q8(p.blastT, 300.0f));
+        w.u8(q8(p.scale, 50.0f));
+        w.u8(q8(p.speedScale, 50.0f));
+        w.u8(p.hitPlayers);
     }
+    for (const Powerup& p : g_.powerups) {
+        w.u8(static_cast<uint8_t>(p.type));
+        w.u8(q8(p.x, 1.0f));
+        w.u8(q8(p.y, 1.0f));
+    }
+    w.u8((g_.world.movePlatforms ? 1 : 0) | (g_.world.obstacles ? 2 : 0) | (g_.world.powerups ? 4 : 0));
 }
 
 bool ThrowhallaGame::decode(Reader& r) {
@@ -152,7 +162,7 @@ bool ThrowhallaGame::decode(Reader& r) {
     struct ProjWire {
         uint8_t flags, typeOwner;
         int16_t x, y, vx, vy, rot;
-        uint8_t fuse, blastT;
+        uint8_t fuse, blastT, scale, speedScale, hitPlayers;
     } prw[cfg::MAX_PROJ];
     for (int i = 0; i < count; ++i) {
         ProjWire& p = prw[i];
@@ -165,7 +175,21 @@ bool ThrowhallaGame::decode(Reader& r) {
         p.rot = r.i16();
         p.fuse = r.u8();
         p.blastT = r.u8();
+        p.scale = r.u8();
+        p.speedScale = r.u8();
+        p.hitPlayers = r.u8();
+        if (!p.scale || !p.speedScale || p.hitPlayers > 3) return false;
     }
+    Powerup powerups[cfg::MAX_POWERUPS];
+    for (auto& p : powerups) {
+        const uint8_t type = r.u8();
+        if (type > static_cast<uint8_t>(PowerupType::Ice)) return false;
+        p.type = static_cast<PowerupType>(type);
+        p.x = r.u8();
+        p.y = r.u8();
+    }
+    const uint8_t worldFlags = r.u8();
+    if (worldFlags > 7) return false;
     if (!r.ok) return false;
 
     g_.phase = static_cast<Phase>(phase);
@@ -173,6 +197,10 @@ bool ThrowhallaGame::decode(Reader& r) {
     g_.phaseTimer = phaseTimer / 100.0f;
     g_.turnTimer = turnTimer / 10.0f;
     g_.setClock(clock);
+    g_.world.movePlatforms = (worldFlags & 1) != 0;
+    g_.world.obstacles = (worldFlags & 2) != 0;
+    g_.world.powerups = (worldFlags & 4) != 0;
+    for (int i = 0; i < cfg::MAX_POWERUPS; ++i) g_.powerups[i] = powerups[i];
 
     for (int i = 0; i < 2; ++i) {
         Player& p = g_.players[i];
@@ -212,12 +240,70 @@ bool ThrowhallaGame::decode(Reader& r) {
         p.rot = w.rot / 256.0f;
         p.fuse = w.fuse / 100.0f;
         p.blastT = w.blastT / 300.0f;
+        p.scale = w.scale / 50.0f;
+        p.speedScale = w.speedScale / 50.0f;
+        p.hitPlayers = w.hitPlayers;
     }
     return true;
 }
 
 #ifdef DEBUG_REMOTE
 bool ThrowhallaGame::debugKey(char key) {
+    // Reproducible powerup contacts through the normal physics and snapshot paths.
+    if ((key >= '5' && key <= '9') || key == '0' || key == 'S' || key == 'O') {
+        const ItemType type = key == 'S' ? ItemType::Bomb : g_.players[0].item;
+        g_.world.movePlatforms = false;
+        g_.world.obstacles = false;
+        g_.phase = Phase::Playing;
+        g_.winner = -1;
+        g_.turnTimer = 0;
+        g_.phaseTimer = 0;
+        for (auto& shot : g_.proj) shot = Projectile();
+        for (auto& player : g_.players) {
+            player.hit = false;
+            player.hitSources = player.hitSerial = player.score = 0;
+            player.hitFlash = player.h = player.vh = 0;
+            player.itemUsed = false;
+            player.charging = false;
+            player.feetY = cfg::PLATFORM_CENTER_Y;
+        }
+        if (g_.mode == GameMode::Solo) g_.players[1].itemUsed = true;
+        for (auto& item : g_.powerups) item = Powerup();
+        g_.players[0].item = type;
+        if (key == 'O') {
+            g_.world.obstacles = true;
+            const PowerupType kinds[3] = {PowerupType::Burger, PowerupType::Split, PowerupType::Ice};
+            for (int i = 0; i < cfg::OBSTACLE_COUNT; ++i) {
+                g_.obstacleXs[i] = 85.0f + i * 35.0f;
+                g_.powerups[i] = {kinds[i], g_.obstacleXs[i] - 3, cfg::OBSTACLE_CENTER_Y};
+            }
+            return true;
+        }
+        if (key == '0') {
+            g_.powerups[0] = {PowerupType::Burger, 85, 40};
+            g_.powerups[1] = {PowerupType::Split, 120, 40};
+            g_.powerups[2] = {PowerupType::Lightning, 155, 40};
+            return true;
+        }
+        Projectile& p = g_.proj[0];
+        p.active = true;
+        p.type = type;
+        p.owner = 0;
+        p.x = key == 'S' ? 180 : 90;
+        p.y = key == 'S' ? 65 : 40;
+        p.vx = key == 'S' ? 0 : 40;
+        p.life = 0.5f;
+        if (key == 'S') { p.fuseOn = true; p.fuse = 0.12f; }
+        if (key == '9') {
+            g_.powerups[0] = {PowerupType::Burger, 90, 40};
+            g_.powerups[1] = {PowerupType::Lightning, 90, 40};
+            g_.powerups[2] = {PowerupType::Split, 90, 40};
+        } else {
+            const PowerupType effect = key == 'S' ? PowerupType::Split : static_cast<PowerupType>(key - '4');
+            g_.powerups[0] = {effect, p.x + (key == 'S' ? 0.0f : 10.0f), p.y};
+        }
+        return true;
+    }
     // Reproducible hardware checks; the host's resulting state is sent through normal snapshots.
     if (key == 'h' || key == 'H' || key == 't' || key == 'c' || key == 'w') {
         if (key == 't' || key == 'c' || key == 'w') {
@@ -240,7 +326,8 @@ bool ThrowhallaGame::debugKey(char key) {
                 p.active = true;
                 p.type = ItemType::Knife;
                 p.owner = i;
-                p.x = i ? 126 : 114;
+                // Keep this DEBUG_REMOTE fixture clear of seeded moving obstacles (x >= 70).
+                p.x = i ? 46 : 34;
                 p.y = 12;
                 p.vx = i ? -360 : 360;
             }
@@ -280,4 +367,4 @@ arcade::IGame* create(void* mem, arcade::Arena&) { return new (mem) ThrowhallaGa
 
 }  // namespace
 
-const arcade::GameInfo kThrowhallaInfo = {"throwhalla", 1, 2, sizeof(ThrowhallaGame), 0, create, 2};
+const arcade::GameInfo kThrowhallaInfo = {"throwhalla", 1, 3, sizeof(ThrowhallaGame), 0, create, 2};

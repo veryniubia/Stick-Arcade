@@ -199,6 +199,43 @@ void drawItemBody(ItemType type, int cx, int cy, float angle, float scale, bool 
     }
 }
 
+void drawPowerup(const Powerup& p) {
+    if (p.type == PowerupType::None) return;
+    const int x = static_cast<int>(p.x), y = static_cast<int>(p.y);
+    const uint16_t edge = p.type == PowerupType::Burger ? rgb(255, 175, 65) :
+                          p.type == PowerupType::Split ? rgb(230, 120, 255) :
+                          p.type == PowerupType::Lightning ? kYellow : rgb(120, 235, 255);
+    switch (p.type) {
+        case PowerupType::Burger:
+            canvas.fillCircle(x, y - 1, 5, edge);
+            canvas.fillRect(x - 5, y, 11, 2, rgb(95, 190, 65));
+            canvas.fillRect(x - 5, y + 2, 11, 2, kWoodDark);
+            canvas.fillRect(x - 4, y + 4, 9, 1, edge);
+            canvas.drawPixel(x - 2, y - 4, kWhite);
+            canvas.drawPixel(x + 2, y - 3, kWhite);
+            break;
+        case PowerupType::Split:
+            canvas.drawLine(x - 4, y, x + 2, y - 4, edge);
+            canvas.drawLine(x - 4, y, x + 2, y + 4, edge);
+            canvas.fillCircle(x - 4, y, 2, kWhite);
+            canvas.fillCircle(x + 3, y - 4, 2, edge);
+            canvas.fillCircle(x + 3, y + 4, 2, edge);
+            break;
+        case PowerupType::Lightning:
+            canvas.fillTriangle(x, y - 6, x - 4, y + 1, x + 2, y, edge);
+            canvas.fillTriangle(x - 2, y, x + 4, y - 1, x, y + 6, edge);
+            break;
+        case PowerupType::Ice:
+            canvas.drawLine(x - 5, y, x + 5, y, edge);
+            canvas.drawLine(x, y - 5, x, y + 5, edge);
+            canvas.drawLine(x - 4, y - 4, x + 4, y + 4, edge);
+            canvas.drawLine(x - 4, y + 4, x + 4, y - 4, edge);
+            canvas.fillCircle(x, y, 2, kWhite);
+            break;
+        default: break;
+    }
+}
+
 // ---- viking ----
 
 void drawFigureBody(int x, int by, int dir, int pal, bool hit, bool blink, float armDeg) {
@@ -425,6 +462,10 @@ void spawnEffects(const Game& g, float dt) {
         g_prevBlast[i] = blasting;
 
         if (!p.active || p.exploding || (g_frame & 1)) continue;
+        if (p.speedScale != 1.0f) {
+            spawn(p.x, p.y, 0, 0, 0.25f,
+                  p.speedScale > 1.0f ? kYellow : rgb(120, 235, 255), 2);
+        }
         switch (p.type) {
             case ItemType::Axe: spawn(p.x, p.y, 0, 0, 0.32f, rgb(150, 154, 162), 3); break;
             case ItemType::Boomerang: spawn(p.x, p.y, 0, 0, 0.3f, rgb(232, 212, 150), 3); break;
@@ -521,6 +562,8 @@ void drawGame(const Game& g, int local) {
 
     drawBackground();
 
+    if (g.world.powerups) for (const auto& p : g.powerups) drawPowerup(p);
+
     if (g.world.obstacles) {
         for (int i = 0; i < cfg::OBSTACLE_COUNT; ++i) {
             drawObstacle(static_cast<int>(g.obstacleXs[i]), static_cast<int>(g.obstacleY(i)),
@@ -550,7 +593,7 @@ void drawGame(const Game& g, int local) {
             drawBlast(p);
         } else {
             const bool lit = p.fuseOn && (static_cast<int>(p.fuse * (p.fuse < 0.7f ? 12.0f : 6.0f)) & 1);
-            drawItem(p.type, static_cast<int>(p.x), static_cast<int>(p.y), p.rot, 1.0f, lit);
+            drawItem(p.type, static_cast<int>(p.x), static_cast<int>(p.y), p.rot, p.scale, lit);
         }
     }
     drawHud(g, local);

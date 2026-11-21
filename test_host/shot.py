@@ -28,13 +28,16 @@ def grab(ser, path):
             break
     else:
         raise SystemExit("no screenshot received")
-    img = Image.new("RGB", (W, H))
+    import re
+    sizes = re.findall(rb"SIZE (\d+) (\d+)\r?\n", buf[:i])
+    width, height = map(int, sizes[-1]) if sizes else (W, H)
+    img = Image.new("RGB", (width, height))
     px = img.load()
-    for y in range(H):
-        for x in range(W):
-            v = (raw[(y * W + x) * 2] << 8) | raw[(y * W + x) * 2 + 1]
+    for y in range(height):
+        for x in range(width):
+            v = (raw[(y * width + x) * 2] << 8) | raw[(y * width + x) * 2 + 1]
             px[x, y] = (((v >> 11) & 31) * 255 // 31, ((v >> 5) & 63) * 255 // 63, (v & 31) * 255 // 31)
-    img.resize((W * 4, H * 4), Image.NEAREST).save(path)
+    img.resize((width * 4, height * 4), Image.NEAREST).save(path)
     print("saved", path)
 
 

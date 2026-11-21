@@ -31,13 +31,16 @@ def grab(ser, path):
     else:
         print("no screenshot", path)
         return
-    img = Image.new("RGB", (W, H))
+    import re
+    sizes = re.findall(rb"SIZE (\d+) (\d+)\r?\n", buf[:i])
+    width, height = map(int, sizes[-1]) if sizes else (W, H)
+    img = Image.new("RGB", (width, height))
     px = img.load()
-    for y in range(H):
-        for x in range(W):
-            v = (raw[(y * W + x) * 2] << 8) | raw[(y * W + x) * 2 + 1]
+    for y in range(height):
+        for x in range(width):
+            v = (raw[(y * width + x) * 2] << 8) | raw[(y * width + x) * 2 + 1]
             px[x, y] = (((v >> 11) & 31) * 255 // 31, ((v >> 5) & 63) * 255 // 63, (v & 31) * 255 // 31)
-    img.resize((W * 3, H * 3), Image.NEAREST).save(path)
+    img.resize((width * 3, height * 3), Image.NEAREST).save(path)
     print("saved", path)
 
 
@@ -81,23 +84,28 @@ def main():
         s.rts = False
         sers.append(s)
     time.sleep(0.3)
-    for step in steps:
-        if step in ("v", "V", "g", "G"):
-            for s in sers:
-                s.write(step.encode())
-        elif step.startswith("p"):  # p<seconds>:<text>
-            secs, _, needle = step[1:].partition(":")
-            play_until(sers, float(secs), needle)
-        elif step.startswith("w"):
-            drain(sers, float(step[1:]))
-        elif step.startswith("@"):
-            for i, s in enumerate(sers):
-                grab(s, f"{step[1:]}_{i}.png")
-        else:
-            idx, _, keys = step.partition(":")
-            targets = sers if idx == "*" else [sers[int(idx)]]
-            for s in targets:
-                s.write(keys.encode())
+    try:
+        for step in steps:
+            if step in ("v", "V", "g", "G"):
+                for s in sers:
+                    s.write(step.encode())
+            elif step.startswith("p"):  # p<seconds>:<text>
+                secs, _, needle = step[1:].partition(":")
+                play_until(sers, float(secs), needle)
+            elif step.startswith("w"):
+                drain(sers, float(step[1:]))
+            elif step.startswith("@"):
+                for i, s in enumerate(sers):
+                    grab(s, f"{step[1:]}_{i}.png")
+            else:
+                idx, _, keys = step.partition(":")
+                targets = sers if idx == "*" else [sers[int(idx)]]
+                for s in targets:
+                    s.write(keys.encode())
+    finally:
+        for s in sers:
+            s.write(b'qkn')
+            s.close()
 
 
 if __name__ == "__main__":

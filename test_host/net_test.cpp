@@ -1,6 +1,6 @@
 // Host-side tests for the online session (pairing, game filtering, sync, loss, disconnects), run against Throwhalla.
 // Build: g++ -std=c++17 -I src test_host/net_test.cpp src/net/net_session.cpp src/core/game_instance.cpp
-//        src/games/throwhalla/throwhalla.cpp src/games/throwhalla/game.cpp src/games/paddle/paddle.cpp
+//        src/games/throwhalla/throwhalla.cpp src/games/throwhalla/game.cpp
 //        -o test_host/net_test.exe
 #include <cmath>
 #include <cstdio>
@@ -14,14 +14,15 @@
 #include "net/net_session.h"
 #undef private
 
-#include "games/paddle/paddle.h"
+#include "games/bumperduel/bumperduel.h"
 #include "games/throwhalla/throwhalla.h"
 
 // The tests never draw: the view half of the games is not linked.
 void ThrowhallaGame::draw(int, const arcade::DrawCtx&) {}
 void ThrowhallaGame::sfx(uint32_t) {}
-void PaddleGame::draw(int, const arcade::DrawCtx&) {}
-void PaddleGame::sfx(uint32_t) {}
+
+void BumperDuelGame::draw(int, const arcade::DrawCtx&) {}
+void BumperDuelGame::sfx(uint32_t) {}
 
 static int failures = 0;
 
@@ -302,6 +303,10 @@ static void expectViewMatches(Endpoint& h, Endpoint& c, int& mismatches) {
         ok = ok && std::fabs(g.platformY(i) - v.platformY(i)) < 0.01f;
     }
     for (int i = 0; i < cfg::OBSTACLE_COUNT; ++i) ok = ok && g.obstacleXs[i] == v.obstacleXs[i];
+    for (int i = 0; i < cfg::MAX_POWERUPS; ++i) {
+        ok = ok && g.powerups[i].type == v.powerups[i].type &&
+             g.powerups[i].x == v.powerups[i].x && g.powerups[i].y == v.powerups[i].y;
+    }
     int ia = 0, ib = 0;
     for (;;) {
         while (ia < cfg::MAX_PROJ && !g.proj[ia].active) ++ia;
@@ -313,6 +318,8 @@ static void expectViewMatches(Endpoint& h, Endpoint& c, int& mismatches) {
         const Projectile& a = g.proj[ia++];
         const Projectile& b = v.proj[ib++];
         ok = ok && a.type == b.type && a.owner == b.owner && a.exploding == b.exploding && a.fuseOn == b.fuseOn &&
+             a.hitPlayers == b.hitPlayers && std::fabs(a.scale - b.scale) < .011f &&
+             std::fabs(a.speedScale - b.speedScale) < .011f &&
              std::fabs(a.x - b.x) < 0.1f && std::fabs(a.y - b.y) < 0.1f && std::fabs(a.vx - b.vx) < 0.2f &&
              std::fabs(a.vy - b.vy) < 0.2f;
     }
@@ -393,8 +400,9 @@ static void testSnapshotConvergesUnderLoss() {
 }
 
 static void duelSetup(Link& l, Endpoint& h, Endpoint& c) {
-    freezeWorld(h, c);
     CHECK(l.runUntil(20000, [&] { return bothPlaying(l); }));
+    freezeWorld(h, c);  // configure the fixture after begin() initializes a new match
+    h.g().world.powerups = false;
     h.g().players[0].item = ItemType::Knife;
     h.g().players[0].itemUsed = false;
     h.g().players[0].score = 4;
@@ -632,45 +640,6 @@ static void testIgnoresForeignAndStalePackets() {
     CHECK(c.g().clock() == clock);
 }
 
-// The same fixture runs any game: PADDLE over a lossy link, from pairing to the match end and the rematch.
-static PaddleGame& paddleOf(Endpoint& e) { return *static_cast<PaddleGame*>(e.gi.game); }
-
-static void testPaddleOverNetwork(float loss, int latency, int jitter) {
-    Link l;
-    l.loss = loss;
-    l.latency = latency;
-    l.jitter = jitter;
-    l.rng = 31;
-    Endpoint& c = l.add(kClient, 0, &kPaddleInfo);
-    Endpoint& h = l.add(kHost, 0, &kPaddleInfo);
-    CHECK(l.runUntil(30000, [&] { return bothPlaying(l); }));
-
-    // Each side's tilt moves its own paddle on the host and in the other side's view.
-    h.in.pad.aim = -PaddleGame::kAimRange;  // host paddle (player 0) to the bottom
-    c.in.pad.aim = PaddleGame::kAimRange;   // client paddle (player 1) to the top
-    l.run(1500);
-    CHECK(paddleOf(h).paddleY[0] > 100.0f && paddleOf(h).paddleY[1] < 30.0f);
-    CHECK(std::fabs(paddleOf(c).paddleY[0] - paddleOf(h).paddleY[0]) < 3.0f);
-    CHECK(std::fabs(paddleOf(c).paddleY[1] - paddleOf(h).paddleY[1]) < 3.0f);
-
-    // Play on with both paddles parked until somebody wins.
-    CHECK(l.runUntil(400000, [&] { return paddleOf(h).phase() == arcade::MatchPhase::MatchEnd; }));
-    CHECK(l.runUntil(3000, [&] { return paddleOf(c).phase() == arcade::MatchPhase::MatchEnd; }));
-    CHECK(paddleOf(c).winner == paddleOf(h).winner);
-    CHECK(paddleOf(c).score[0] == paddleOf(h).score[0] && paddleOf(c).score[1] == paddleOf(h).score[1]);
-
-    const uint8_t firstMatch = h.s.matchId_;
-    h.in.again = true;
-    l.run(500);
-    CHECK(paddleOf(h).phase() == arcade::MatchPhase::MatchEnd);  // one side is not enough
-    c.in.again = true;
-    CHECK(l.runUntil(3000, [&] { return h.s.matchId_ != firstMatch; }));
-    CHECK(l.runUntil(8000, [&] { return bothPlaying(l); }));
-    l.run(300);
-    CHECK(paddleOf(h).score[0] == 0 && paddleOf(h).score[1] == 0);
-    CHECK(paddleOf(c).score[0] == 0 && paddleOf(c).phase() != arcade::MatchPhase::MatchEnd);
-}
-
 static void testGarbageDoesNotCrash() {
     Link l;
     Endpoint& c = l.add(kClient);
@@ -700,6 +669,45 @@ static void testGarbageDoesNotCrash() {
     CHECK(true);
 }
 
+
+static BumperDuelGame& bumperOf(Endpoint& e) { return *static_cast<BumperDuelGame*>(e.gi.game); }
+static void testBumperOverNetwork(float loss, int latency, int jitter) {
+    Link l; l.loss=loss; l.latency=latency; l.jitter=jitter; l.rng=91;
+    auto& c=l.add(kClient,0,&kBumperDuelInfo); auto& h=l.add(kHost,0,&kBumperDuelInfo);
+    CHECK(l.runUntil(30000,[&]{return bothPlaying(l);}));
+    l.run(150);CHECK(bumperOf(c).seed==bumperOf(h).seed);
+    c.in.pad.a=true;c.in.pad.aim=20; l.run(600);
+    CHECK(bumperOf(h).cars[1].control==1 && fabsf(bumperOf(h).cars[1].angle-bumperOf(h).heading(1,20))<.01f);
+    c.in.pad.a=false;c.in.pad.b=true;++c.in.pad.bCount;c.in.pad.aim=0;l.run(1200);
+    CHECK(bumperOf(h).cars[1].cooldown>1 && bumperOf(h).cars[1].cooldown<2.1f);
+    c.in.pad.b=false;
+    for(int n=0;n<5;++n){bumperOf(h).fixture(n==0?'c':'s');l.run(300);CHECK(bumperOf(h).score[0]==n+1);}
+    CHECK(l.runUntil(3000,[&]{return bumperOf(c).phase()==arcade::MatchPhase::MatchEnd;}));
+    CHECK(bumperOf(c).winner==bumperOf(h).winner && bumperOf(c).score[0]==5);
+    l.run(100);arcade::Writer a,b;bumperOf(h).encode(a);bumperOf(c).encode(b);
+    CHECK(a.n==b.n && memcmp(a.buf,b.buf,a.n)==0);CHECK(l.maxLen==104);
+    bool swapped=bumperOf(h).swapped;uint32_t seed=bumperOf(h).seed;
+    h.in.again=true;l.run(500);CHECK(bumperOf(h).phase()==arcade::MatchPhase::MatchEnd);
+    c.in.again=true;CHECK(l.runUntil(4000,[&]{return bumperOf(h).seed!=seed;}));
+    CHECK(bumperOf(h).swapped!=swapped);
+    CHECK(l.runUntil(10000,[&]{return bothPlaying(l);}));l.run(300);
+    CHECK(bumperOf(c).swapped==bumperOf(h).swapped && bumperOf(c).score[0]==0);
+    l.cut=true;l.run(1000);CHECK(h.s.status()==Status::LinkLost&&c.s.status()==Status::LinkLost);
+    float time=bumperOf(h).elapsed;l.run(500);CHECK(bumperOf(h).elapsed==time);
+    l.cut=false;CHECK(l.runUntil(2000,[&]{return bothPlaying(l);}));
+    c.s.leave();CHECK(l.runUntil(500,[&]{return h.s.status()==Status::PeerLeft;}));
+}
+
+static void testBumperWireIsolation() {
+    for(int variant=0;variant<2;++variant){
+        arcade::GameInfo incompatible=kBumperDuelInfo;
+        if(variant==0)incompatible.wireId=3;else incompatible.protoVer=4;  // previous fixed-reference sumo without items
+        Link l;auto& a=l.add(kClient,0,&incompatible);auto& b=l.add(kHost,0,&kBumperDuelInfo);
+        l.run(10000);CHECK(a.s.status()==Status::Searching&&b.s.status()==Status::Searching);
+        CHECK(!a.s.peerNearby(l.now)&&!b.s.peerNearby(l.now));
+    }
+}
+
 int main() {
     testPairingClean();
     testPairingSimultaneousAnyOrder();
@@ -724,8 +732,9 @@ int main() {
     testPeerLeaves(false, 0.3f);
     testRtt();
     testIgnoresForeignAndStalePackets();
-    testPaddleOverNetwork(0.0f, 0, 0);
-    testPaddleOverNetwork(0.2f, 15, 20);
+    testBumperWireIsolation();
+    testBumperOverNetwork(0,0,0);
+    testBumperOverNetwork(0.2f,15,20);
     testGarbageDoesNotCrash();
     std::printf(failures ? "%d FAILURES\n" : "ALL PASSED\n", failures);
     return failures ? 1 : 0;

@@ -1,6 +1,7 @@
 #include "core/display.h"
 
 #include <esp_timer.h>
+#include <esp_heap_caps.h>
 
 #include "core/platform.h"
 
@@ -9,9 +10,13 @@ namespace display {
 namespace {
 
 M5Canvas g_cv[2] = {M5Canvas(&M5.Display), M5Canvas(&M5.Display)};
+bool g_portrait = false;
 int g_back = 0;
 int g_front = 0;
 bool g_dma = false;
+void* g_buffers[2] = {};
+bool g_initialized = false;
+constexpr size_t kBufferBytes = platform::kScreenW * platform::kScreenH * 2 + 2;
 int64_t g_nextUs = 0;
 int64_t g_periodUs = 1000000 / 60;
 uint32_t g_pushUs = 0;
@@ -32,24 +37,42 @@ void pace() {
 }  // namespace
 
 bool begin() {
-    g_dma = true;
-    for (auto& c : g_cv) {
-        c.setColorDepth(16);
-        c.setPsram(false);
-        if (!c.createSprite(platform::kScreenW, platform::kScreenH)) g_dma = false;
-    }
+    if (g_initialized) return g_buffers[0] != nullptr;
+    // Reserve both frames before Wi-Fi starts. Rotation must never free/reallocate these
+    // large internal blocks: repeated lobby/game switches otherwise fragment DMA RAM.
+    g_buffers[0] = heap_caps_malloc(kBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    g_buffers[1] = heap_caps_malloc(kBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    g_dma = g_buffers[0] && g_buffers[1];
     if (!g_dma) {
-        for (auto& c : g_cv) c.deleteSprite();
-        g_cv[0].setPsram(true);
-        if (!g_cv[0].createSprite(platform::kScreenW, platform::kScreenH)) return false;
-    } else {
-        M5.Display.startWrite();  // stays open: the transfers are started with DMA and finished by waitDMA()
+        for (auto& buffer : g_buffers) { heap_caps_free(buffer); buffer = nullptr; }
+        g_buffers[0] = heap_caps_malloc(kBufferBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!g_buffers[0]) return false;
     }
+    for (int i = 0; i < (g_dma ? 2 : 1); ++i)
+        g_cv[i].setBuffer(g_buffers[i], width(), height(), 16);
+    if (g_dma) M5.Display.startWrite();
+    g_initialized = true;
     g_back = g_front = 0;
     return true;
 }
 
 M5Canvas& canvas() { return g_cv[g_back]; }
+int width() { return g_portrait ? 135 : 240; }
+int height() { return g_portrait ? 240 : 135; }
+void setPortrait(bool portrait) {
+    if (portrait == g_portrait) return;
+    M5.Display.waitDMA();
+    if (g_dma) M5.Display.endWrite();
+    g_portrait = portrait;
+    M5.Display.setRotation(portrait ? 0 : 1);
+    // setBuffer borrows external storage; only its dimensions/clip are rebound.
+    for (int i = 0; i < (g_dma ? 2 : 1); ++i)
+        g_cv[i].setBuffer(g_buffers[i], width(), height(), 16);
+    g_back = g_front = 0;
+    g_nextUs = 0;
+    if (g_dma) M5.Display.startWrite();
+
+}
 
 void setTargetFps(int fps) { g_periodUs = 1000000 / (fps > 0 ? fps : 60); }
 

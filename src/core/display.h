@@ -12,6 +12,9 @@ bool begin();
 M5Canvas& canvas();  // the buffer to draw the next frame into
 void present();      // waits for the frame time, starts the transfer, switches to the other buffer
 void setTargetFps(int fps);
+void setPortrait(bool portrait);
+int width();
+int height();
 
 const void* lastFrame();  // pixels of the frame that was presented last (RGB565, big-endian)
 bool dmaActive();

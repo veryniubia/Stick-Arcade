@@ -5,6 +5,14 @@
 #include "config.h"
 
 enum class ItemType : uint8_t { None, Knife, Axe, Bomb, Boomerang };
+enum class PowerupType : uint8_t { None, Burger, Split, Lightning, Ice };
+
+struct Powerup {
+    PowerupType type = PowerupType::None;
+    float x = 0, y = 0;
+    Powerup() = default;
+    Powerup(PowerupType kind, float px, float py) : type(kind), x(px), y(py) {}
+};
 // Solo: the opponent never moves and counts as "already thrown"; the player throws once per round, rounds repeat
 // forever and every hit on the opponent scores a point. Versus: two players, first to WIN_SCORE.
 enum class GameMode : uint8_t { Solo, Versus };
@@ -44,7 +52,7 @@ struct Player {
     int8_t face = 1;     // current facing: equals dir, or -dir while aiming backward
     float cooldown = 0.0f;
     bool hit = false;
-    uint8_t hitSources = 0;  // one damage per original thrower per round
+    uint8_t hitSources = 0;  // aggregate original throwers; damage is tracked per projectile
     uint8_t hitSerial = 0;   // changes on every valid hit, including a second hit
     float hitFlash = 0.0f;
     uint8_t score = 0;
@@ -62,11 +70,15 @@ struct Projectile {
     float fuse = 0.0f;
     bool exploding = false;
     float blastT = 0.0f;
+    float scale = 1.0f;
+    float speedScale = 1.0f;
+    uint8_t hitPlayers = 0;  // a persistent blast hits each player once
 };
 
 struct WorldOptions {
     bool movePlatforms = true;
     bool obstacles = true;
+    bool powerups = true;
 };
 
 class Game {
@@ -79,6 +91,7 @@ public:
     WorldOptions world;
     Player players[2];
     Projectile proj[cfg::MAX_PROJ];
+    Powerup powerups[cfg::MAX_POWERUPS];
     int winner = -1;
     float phaseTimer = 0.0f;
     float turnTimer = 0.0f;  // seconds since the round started (Versus turn timeout)
@@ -98,6 +111,7 @@ public:
     static float handX(const Player& p);
     static float handY(const Player& p);
     static float blastRadius(const Projectile& p);
+    static float projectileRadius(const Projectile& p);
 
     // Index of the player who has lost the match (the 5th point is already decided), or -1.
     int matchLoser() const;
@@ -126,6 +140,8 @@ private:
     bool bounceOffPlayers(Projectile& p, float radius, float rest);
     void detonate(Projectile& p);
     void checkHits(Projectile& p);
+    void spawnPowerups();
+    void collectPowerups(Projectile& p);
     bool anyProjectile() const;
     void finishRound();
 };

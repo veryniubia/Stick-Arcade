@@ -74,13 +74,15 @@ float Game::obstacleVy(int i) const {
 float Game::handX(const Player& p) { return p.x + p.face * cfg::HAND_DX; }
 float Game::handY(const Player& p) { return p.feetY - cfg::HAND_DY; }
 
+float Game::projectileRadius(const Projectile& p) { return specOf(p.type).radius * p.scale; }
+
 float Game::blastRadius(const Projectile& p) {
     const float elapsed = cfg::BOMB_BLAST_SEC - p.blastT;
     const float grow = clampf(elapsed / cfg::BOMB_BLAST_GROW_SEC, 0.0f, 1.0f);
     const float ease = 1.0f - (1.0f - grow) * (1.0f - grow);
     float r = cfg::BOMB_BLAST_R * (0.25f + 0.75f * ease);
     if (p.blastT < cfg::BOMB_BLAST_FADE_SEC) r *= clampf(p.blastT / cfg::BOMB_BLAST_FADE_SEC, 0.0f, 1.0f);
-    return r;
+    return r * p.scale;
 }
 
 uint32_t Game::rand32() {
@@ -142,6 +144,71 @@ void Game::startRound(bool refresh) {
         p.cooldown = 0.0f;
     }
     if (refresh) refreshItems();
+    spawnPowerups();
+}
+
+void Game::spawnPowerups() {
+    for (auto& p : powerups) p = Powerup();
+    if (!world.powerups) return;
+    const int count = rand32() % (cfg::MAX_POWERUPS + 1);
+    int lanes[cfg::MAX_POWERUPS] = {0, 1, 2};
+    for (int i = cfg::MAX_POWERUPS - 1; i > 0; --i) {
+        const int j = rand32() % (i + 1);
+        const int temp = lanes[i]; lanes[i] = lanes[j]; lanes[j] = temp;
+    }
+    for (int i = 0; i < count; ++i) {
+        Powerup& p = powerups[i];
+        p.type = static_cast<PowerupType>(1 + rand32() % 4);
+        // Separate horizontal lanes keep icons apart and clear of both players.
+        p.x = 78.0f + lanes[i] * 40.0f + (rand32() % 21);
+        p.y = 22.0f + (rand32() % 61);
+        if (world.obstacles) {
+            for (int attempt = 0; attempt < 32; ++attempt) {
+                bool clear = true;
+                for (int j = 0; j < cfg::OBSTACLE_COUNT; ++j) {
+                    const float dx = p.x - obstacleXs[j], dy = p.y - obstacleY(j);
+                    if (dx * dx + dy * dy < 196.0f) clear = false;
+                }
+                if (clear) break;
+                p.y = 22.0f + (rand32() % 61);
+            }
+        }
+    }
+}
+
+void Game::collectPowerups(Projectile& p) {
+    if (!world.powerups || phase != Phase::Playing || p.exploding) return;
+    for (auto& item : powerups) {
+        if (item.type == PowerupType::None) continue;
+        const float dx = p.x - item.x, dy = p.y - item.y;
+        const float r = projectileRadius(p) + cfg::POWERUP_R;
+        if (dx * dx + dy * dy > r * r) continue;
+        if (item.type == PowerupType::Split) {
+            Projectile* child = nullptr;
+            for (auto& slot : proj) if (!slot.active) { child = &slot; break; }
+            if (!child) continue;  // do not consume the core unless both halves can exist
+            *child = p;  // preserve type, effects, age, fuse and original owner
+            const float c = cosf(cfg::SPLIT_ANGLE), s = sinf(cfg::SPLIT_ANGLE);
+            const float vx = p.vx, vy = p.vy;
+            p.vx = vx * c - vy * s; p.vy = vx * s + vy * c;
+            child->vx = vx * c + vy * s; child->vy = -vx * s + vy * c;
+            // Start the children just apart so their first contact isn't a mutual bounce.
+            const float speed = sqrtf(vx * vx + vy * vy);
+            const float nx = speed > 0.001f ? -vy / speed : 0.0f;
+            const float ny = speed > 0.001f ? vx / speed : 1.0f;
+            const float offset = projectileRadius(p) + 0.1f;
+            p.x += nx * offset; p.y += ny * offset;
+            child->x -= nx * offset; child->y -= ny * offset;
+            if (p.type == ItemType::Knife) child->rot = atan2f(child->vy, child->vx);
+        } else if (item.type == PowerupType::Burger) {
+            p.scale *= cfg::BURGER_SCALE;
+        } else {
+            const float factor = item.type == PowerupType::Lightning ? cfg::LIGHTNING_SPEED : cfg::ICE_SPEED;
+            p.vx *= factor; p.vy *= factor;
+            p.speedScale *= factor;
+        }
+        item = Powerup();
+    }
 }
 
 bool Game::isDraw() const {
@@ -262,18 +329,19 @@ void Game::checkHits(Projectile& p) {
     for (int i = 0; i < 2; ++i) {
         Player& pl = players[i];
         const uint8_t source = static_cast<uint8_t>(1u << p.owner);
-        if (pl.hitSources & source) continue;
+        if (p.hitPlayers & (1u << i)) continue;
         if (p.type == ItemType::Bomb && !p.exploding) continue;  // a bomb only hurts through its blast
         if (!p.exploding && i == p.owner && p.life < cfg::OWNER_IMMUNE_SEC) continue;
 
         const float bottom = pl.feetY;
         const float top = bottom - cfg::PLAYER_H;
-        const float radius = p.exploding ? blastRadius(p) : specOf(p.type).radius;
+        const float radius = p.exploding ? blastRadius(p) : projectileRadius(p);
         if (!circleRect(p.x, p.y, radius, pl.x - cfg::PLAYER_HALF_W, top, pl.x + cfg::PLAYER_HALF_W, bottom))
             continue;
 
         pl.hit = true;
         pl.hitSources |= source;
+        p.hitPlayers |= static_cast<uint8_t>(1u << i);
         ++pl.hitSerial;
         pl.hitFlash = 1.0f;
         if (mode == GameMode::Versus || i == 1) {
@@ -376,7 +444,7 @@ void Game::updateProjectile(Projectile& p, float dt) {
     }
 
     const ItemSpec& spec = specOf(p.type);
-    const float r = spec.radius;
+    const float accelScale = p.speedScale * p.speedScale;
 
     switch (p.type) {
         case ItemType::Knife:
@@ -384,13 +452,13 @@ void Game::updateProjectile(Projectile& p, float dt) {
             p.y += p.vy * dt;
             break;
         case ItemType::Axe:
-            p.vy += cfg::WORLD_G * dt;
+            p.vy += cfg::WORLD_G * accelScale * dt;
             p.x += p.vx * dt;
             p.y += p.vy * dt;
             p.rot += (p.vx >= 0 ? 14.0f : -14.0f) * dt;
             break;
         case ItemType::Bomb:
-            p.vy += cfg::WORLD_G * dt;
+            p.vy += cfg::WORLD_G * accelScale * dt;
             p.x += p.vx * dt;
             p.y += p.vy * dt;
             p.rot += p.vx * dt * 0.1f;
@@ -401,8 +469,8 @@ void Game::updateProjectile(Projectile& p, float dt) {
             const float dy = handY(owner) - p.y;
             const float len = sqrtf(dx * dx + dy * dy);
             if (len > 1.0f) {
-                p.vx += dx / len * cfg::BOOMERANG_PULL * dt;
-                p.vy += dy / len * cfg::BOOMERANG_PULL * dt;
+                p.vx += dx / len * cfg::BOOMERANG_PULL * accelScale * dt;
+                p.vy += dy / len * cfg::BOOMERANG_PULL * accelScale * dt;
             }
             p.x += p.vx * dt;
             p.y += p.vy * dt;
@@ -414,6 +482,8 @@ void Game::updateProjectile(Projectile& p, float dt) {
             return;
     }
 
+    collectPowerups(p);
+    const float r = projectileRadius(p);
     if (collideWorld(p, r, spec.wallRest, spec.obstacleRest)) registerBounce(p);
     if (!p.active) return;
     if (p.type == ItemType::Knife) p.rot = atan2f(p.vy, p.vx);
@@ -469,7 +539,7 @@ void Game::collideProjectiles() {
         for (int j = i + 1; j < cfg::MAX_PROJ && a.active; ++j) {
             Projectile& b = proj[j];
             if (!b.active || b.exploding) continue;
-            const float radius = specOf(a.type).radius + specOf(b.type).radius;
+            const float radius = projectileRadius(a) + projectileRadius(b);
             const float dx = b.x - a.x, dy = b.y - a.y;
             const float d2 = dx * dx + dy * dy;
             if (d2 >= radius * radius) continue;
@@ -506,13 +576,21 @@ uint32_t Game::update(float dt, const PlayerInput in[2]) {
     for (int i = 0; i < 2; ++i) updatePlayer(i, in[i], dt);
     // Bound travel to two pixels per substep, including fast head-on knives.
     float maxSpeed = 0.0f;
+    float maxAccelScale = 1.0f;
     for (const auto& p : proj) {
         if (p.active && !p.exploding) {
             const float speed = sqrtf(p.vx * p.vx + p.vy * p.vy);
             if (speed > maxSpeed) maxSpeed = speed;
+            if (p.speedScale * p.speedScale > maxAccelScale) maxAccelScale = p.speedScale * p.speedScale;
         }
     }
-    const int steps = 1 + static_cast<int>((maxSpeed + (cfg::WORLD_G + cfg::BOOMERANG_PULL) * dt) * dt / 2.0f);
+    // Account for collecting up to three speed boosts during this update too.
+    float maxBoost = 1.0f;
+    if (world.powerups) for (const auto& item : powerups) {
+        if (item.type == PowerupType::Lightning) maxBoost *= cfg::LIGHTNING_SPEED;
+    }
+    const int steps = 1 + static_cast<int>((maxSpeed * maxBoost +
+        (cfg::WORLD_G + cfg::BOOMERANG_PULL) * maxAccelScale * maxBoost * maxBoost * dt) * dt / 2.0f);
     for (int step = 0; step < steps; ++step) {
         for (auto& p : proj) updateProjectile(p, dt / steps);
         collideProjectiles();

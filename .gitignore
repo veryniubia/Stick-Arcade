@@ -3,3 +3,4 @@ test_host/*.exe
 test_host/*.obj
 __pycache__/
 .venv/
+/out/

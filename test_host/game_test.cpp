@@ -25,6 +25,7 @@ struct Sim {
     uint32_t ev = 0;
 
     explicit Sim(bool obstacles = false, bool moving = false) {
+        g.world.powerups = false;
         g.world.obstacles = obstacles;
         g.world.movePlatforms = moving;
     }
@@ -610,7 +611,78 @@ static void testMovingPlatformsStayInRange() {
     CHECK(hi - lo > cfg::MOTION_AMP);  // it actually moves
 }
 
+static void testAirbornePowerups() {
+    bool counts[4] = {}, duplicate = false;
+    for (uint32_t seed = 1; seed < 150; ++seed) {
+        Game a, b;
+        a.begin(GameMode::Versus, seed); b.begin(GameMode::Versus, seed);
+        int count = 0;
+        for (int i = 0; i < cfg::MAX_POWERUPS; ++i) {
+            const auto& p = a.powerups[i];
+            CHECK(p.type == b.powerups[i].type && p.x == b.powerups[i].x && p.y == b.powerups[i].y);
+            if (p.type == PowerupType::None) continue;
+            ++count;
+            CHECK(p.x > 65 && p.x < 185 && p.y >= 22 && p.y <= 82);
+            for (int j = 0; j < i; ++j) if (a.powerups[j].type == p.type) duplicate = true;
+        }
+        counts[count] = true;
+    }
+    CHECK(counts[0] && counts[1] && counts[2] && counts[3] && duplicate);
+
+    for (int type = 1; type <= 4; ++type) {
+        Sim s;
+        s.g.begin(GameMode::Versus, 1);
+        s.g.world.powerups = true;
+        Projectile& p = s.g.proj[0];
+        p.active = true; p.type = static_cast<ItemType>(type); p.owner = 0;
+        p.x = 120; p.y = 45; p.vx = 100; p.life = 1;
+        auto collect = [&](PowerupType t) {
+            s.g.powerups[0] = {t, p.x, p.y};
+            s.tick();
+            CHECK(s.g.powerups[0].type == PowerupType::None);
+        };
+        collect(PowerupType::Burger);
+        collect(PowerupType::Burger);
+        CHECK(std::fabs(p.scale - 2.56f) < .001f);
+        collect(PowerupType::Ice);
+        CHECK(std::fabs(p.speedScale - .6f) < .001f);
+        collect(PowerupType::Lightning);
+        CHECK(std::fabs(p.speedScale - .9f) < .001f);
+        const float age = p.life;
+        collect(PowerupType::Split);
+        Projectile& child = s.g.proj[1];
+        CHECK(p.active && child.active && child.type == p.type && child.owner == p.owner);
+        CHECK(child.scale == p.scale && child.speedScale == p.speedScale && child.life >= age);
+        CHECK(p.vy != child.vy);
+        // Independent children can each score, including overlapping persistent explosions.
+        for (int i = 0; i < 2; ++i) {
+            Projectile& hit = s.g.proj[i];
+            hit.x = s.g.players[1].x; hit.y = s.g.players[1].feetY - 8;
+            hit.vx = hit.vy = 0;
+            hit.scale = 1; hit.bounces = 0;
+            if (type == 3) { hit.exploding = true; hit.blastT = cfg::BOMB_BLAST_SEC; }
+        }
+        s.tick();
+        CHECK(s.g.players[0].score == 2 && s.g.players[1].hitSerial == 2);
+        s.run(.3f);
+        CHECK(s.g.players[0].score == 2);
+    }
+
+    Sim s;
+    s.g.begin(GameMode::Versus, 2); s.g.world.powerups = true;
+    auto& p = s.g.proj[0];
+    p.active = true; p.type = ItemType::Knife; p.x = 100; p.y = 30; p.vx = 360;
+    s.g.powerups[0] = {PowerupType::Lightning, 105, 30};
+    s.g.powerups[1] = {PowerupType::Lightning, 123, 30};
+    s.g.powerups[2] = {PowerupType::Ice, 140, 30};
+    s.g.update(.06f, s.in);
+    CHECK(s.g.powerups[0].type == PowerupType::None && s.g.powerups[1].type == PowerupType::None);
+    CHECK(s.g.powerups[2].type == PowerupType::None); // fast travel cannot skip an icon
+    CHECK(std::fabs(p.vx - 486) < .01f);
+}
+
 int main() {
+    testAirbornePowerups();
     testKnifeHit();
     testJumpHeightDependsOnHold();
     testFullJumpDodgesKnife();

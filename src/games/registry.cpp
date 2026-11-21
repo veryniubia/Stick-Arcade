@@ -1,11 +1,14 @@
 #include "games/registry.h"
 
+#ifndef ONLY_GAME_BUMPERDUEL
 #include "games/throwhalla/throwhalla.h"
 #include "games/throwhalla/view.h"
+#endif
+
 
 #ifndef ONLY_GAME_THROWHALLA
-#include "games/paddle/paddle.h"
-#include "games/paddle/view.h"
+#include "games/bumperduel/bumperduel.h"
+#include "games/bumperduel/view.h"
 #endif
 
 namespace registry {
@@ -13,9 +16,11 @@ namespace registry {
 namespace {
 
 const GameEntry kGames[] = {
+#ifndef ONLY_GAME_BUMPERDUEL
     {&kThrowhallaInfo, "THROWHALLA", throwhalla_view::init, throwhalla_view::drawCard, throwhalla_view::drawLobby},
+#endif
 #ifndef ONLY_GAME_THROWHALLA
-    {&kPaddleInfo, "PADDLE", nullptr, paddle_view::drawCard, paddle_view::drawLobby},
+    {&kBumperDuelInfo, "BIG BUMP", nullptr, bumperduel_view::drawCard, bumperduel_view::drawLobby},
 #endif
 };
 
