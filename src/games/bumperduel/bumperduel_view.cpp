@@ -70,11 +70,7 @@ void itemIcon(BumperDuelGame::ItemType type, int x, int y) {
     using G = BumperDuelGame;
     auto& c = display::canvas();
     if (type == G::Burger) {
-        c.fillRoundRect(x+1,y+1,9,4,2,rgb(243,169,62));
-        c.fillRect(x,y+5,11,1,rgb(111,208,77));
-        c.fillRect(x+1,y+6,9,2,rgb(113,57,41));
-        c.fillRect(x+1,y+8,9,2,rgb(243,169,62));
-        c.drawPixel(x+4,y+2,ui::kWhite); c.drawPixel(x+7,y+3,ui::kWhite);
+        ui::drawBurger(x+5, y+5);
     } else if (type == G::Shoes) {
         c.fillRect(x+1,y+1,4,6,rgb(94,224,212));
         c.fillRoundRect(x+1,y+5,9,4,1,rgb(94,224,212));
@@ -140,11 +136,8 @@ void BumperDuelGame::draw(int local,const arcade::DrawCtx& ctx) {
         if (item.type == None) continue;
         int x=int(item.x), y=int(item.y);
         if (item.warning>0) {
-            if ((ctx.nowMs/80)%2) c.drawCircle(x,y,8,gold);
             c.drawLine(x-3,y,x+3,y,gold); c.drawLine(x,y-3,x,y+3,gold);
         } else if (item.ttl>2 || (ctx.nowMs/100)%2) {
-            c.fillCircle(x,y+1,8,rgb(18,35,43));
-            c.drawCircle(x,y,8,rgb(118,131,103));
             itemIcon(item.type,x-5,y-5);
         }
     }
@@ -180,7 +173,10 @@ void BumperDuelGame::draw(int local,const arcade::DrawCtx& ctx) {
             c.fillRect(bx,by+11,int(11*timers[n]/6),1,n==0 ? gold:n==1 ? rgb(94,224,212):rgb(104,211,255));
             bx+=12;
         }
-        if (p.protection>.35f) ui::shadowText("OUCH!",int(renderX_[i]),std::max(28,int(renderY_[i]-radius(p)-(active?22:8))),1,gold);
+        if (phase_ == arcade::MatchPhase::Playing && p.protection > .35f) {
+            const int x = std::max(16, std::min(118, int(renderX_[i])));
+            ui::hitNotice(i == local, x, std::max(28,int(renderY_[i]-radius(p)-(active?22:8))), 1);
+        }
         // Both cooldowns are visible; a ready opponent is part of the timing game.
         int x=int(renderX_[i])-8, y=int(renderY_[i]+radius(p))+5;
         c.fillRect(x,y,16,2,rgb(12,24,33));
@@ -201,10 +197,7 @@ void BumperDuelGame::draw(int local,const arcade::DrawCtx& ctx) {
     c.fillRect(0,228,135,12,bg);
     ui::shadowText(hint,67,234,1,own.cooldown>0 ? rgb(185,205,210):gold);
     if(phase_==arcade::MatchPhase::MatchEnd) {
-        c.fillRoundRect(9,100,117,68,5,bg); c.drawRoundRect(9,100,117,68,5,winner<0 ? gold:winner ? red:blue);
-        ui::shadowText(winner<0 ? "DRAW":winner==local ? "YOU WIN":"YOU LOSE",67,115,2,winner==local ? ui::green():gold);
-        char result[12];snprintf(result,sizeof(result),"%u - %u",unsigned(score[0]),unsigned(score[1]));
-        ui::shadowText(result,67,132,1,ui::kWhite);
+        ui::matchResult(winner, local, 67, 115, 2);
         if(ctx.solo)ui::shadowText("A AGAIN",67,148,1,ui::kWhite);
     }
 }

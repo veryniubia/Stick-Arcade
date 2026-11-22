@@ -18,6 +18,12 @@ uint16_t keyRed();    // colour of the A key chip
 // Text centred on (x, y) with a one pixel drop shadow.
 void shadowText(const char* text, int x, int y, int size, uint16_t color);
 
+// Feedback anchors are in screen pixels. Portrait games can anchor a hit to its victim.
+constexpr float kHitNoticeSeconds = .7f;
+void hitNotice(bool localWasHit, int x, int y, int size);
+void matchResult(int winner, int local, int x, int y, int size);
+void drawBurger(int centerX, int centerY);
+
 // Bottom strip with the two key hints, e.g. hintBar("NEXT", "OK") draws "B NEXT" on the left and "A OK" on the
 // right. A null label hides that side. `blinkB` makes the B hint flash (used to nudge the user).
 void hintBar(const char* bLabel, const char* aLabel, bool blinkB = false);

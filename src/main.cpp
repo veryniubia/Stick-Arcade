@@ -8,6 +8,7 @@
 #include "core/debug.h"
 #include "core/display.h"
 #include "core/input.h"
+#include "core/offline_trace.h"
 #include "core/platform.h"
 #include "core/settings.h"
 #include "core/sound.h"
@@ -182,6 +183,7 @@ void setup() {
     cfg.pmic_button = false;  // polling the power key over I2C costs 0.8 ms per frame and the platform does not use it
     M5.begin(cfg);
     Serial.begin(115200);
+    offline_trace::begin();
 
     M5.Display.setRotation(1);
     M5.Display.fillScreen(TFT_BLACK);
@@ -205,6 +207,7 @@ void loop() {
     M5.update();
     input::update();
     sound::update();
+    offline_trace::poll();
     debugPoll();
 #ifdef DEBUG_REMOTE
     const uint32_t tIn = perf::us() - tLoop0;

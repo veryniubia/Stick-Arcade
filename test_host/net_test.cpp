@@ -16,6 +16,7 @@
 
 #include "games/bumperduel/bumperduel.h"
 #include "games/throwhalla/throwhalla.h"
+#include "games/samuraiduel/samuraiduel.h"
 
 // The tests never draw: the view half of the games is not linked.
 void ThrowhallaGame::draw(int, const arcade::DrawCtx&) {}
@@ -23,6 +24,8 @@ void ThrowhallaGame::sfx(uint32_t) {}
 
 void BumperDuelGame::draw(int, const arcade::DrawCtx&) {}
 void BumperDuelGame::sfx(uint32_t) {}
+void SamuraiDuelGame::draw(int, const arcade::DrawCtx&) {}
+void SamuraiDuelGame::sfx(uint32_t) {}
 
 static int failures = 0;
 
@@ -708,6 +711,56 @@ static void testBumperWireIsolation() {
     }
 }
 
+static SamuraiDuelGame& samuraiOf(Endpoint& e) { return *static_cast<SamuraiDuelGame*>(e.gi.game); }
+static void testSamuraiOverNetwork(float loss, int latency, int jitter) {
+    Link l;l.loss=loss;l.latency=latency;l.jitter=jitter;l.rng=98;
+    auto& c=l.add(kClient,0,&kSamuraiDuelInfo);auto& h=l.add(kHost,0,&kSamuraiDuelInfo);
+    CHECK(l.runUntil(30000,[&]{return bothPlaying(l);}));l.run(200);
+    CHECK(samuraiOf(c).seed==samuraiOf(h).seed);
+    const float spawn[2]={samuraiOf(h).fighters[0].x,samuraiOf(h).fighters[1].x};
+    const int sword=samuraiOf(h).swordPlayer;
+    CHECK(samuraiOf(c).fighters[0].x==spawn[0] && samuraiOf(c).fighters[1].x==spawn[1]);
+    const int moveDirection=spawn[1]>spawn[0] ? -1:1;
+    c.in.pad.b=true;++c.in.pad.bCount;c.in.pad.aim=32*moveDirection;++c.in.pad.aCount;
+    CHECK(l.runUntil(1200,[&]{return (h.events&SamuraiDuelGame::Shot)!=0;}));
+    CHECK((samuraiOf(h).fighters[1].x-spawn[1])*moveDirection>0);
+    c.in.pad.b=false;c.in.pad.aim=0;
+    l.run(1300);
+    // Complete real rounds using guaranteed incoming bullets; roles and scores must replicate.
+    for(int round=0;round<SamuraiDuelGame::kWinningScore;++round) {
+        auto& g=samuraiOf(h);
+        auto& b=g.bullets[0];b.active=true;b.owner=0;b.direction=1;
+        b.reflected=g.isSword(0);b.x=g.fighters[1].x-7;b.y=g.fighters[1].y-8;
+        l.run(200);CHECK(g.score[0]==round+1);
+        CHECK(l.runUntil(1500,[&]{return samuraiOf(c).score[0]==round+1;}));
+        if(round<SamuraiDuelGame::kWinningScore-1) {
+            CHECK(l.runUntil(2500,[&]{return g.phase()==arcade::MatchPhase::Playing;}));l.run(200);
+            CHECK(samuraiOf(c).swordPlayer==sword && g.swordPlayer==sword);
+            CHECK(g.fighters[0].x==spawn[0] && g.fighters[1].x==spawn[1]);
+            CHECK(samuraiOf(c).fighters[0].x==spawn[0] && samuraiOf(c).fighters[1].x==spawn[1]);
+        }
+    }
+    CHECK(l.runUntil(1500,[&]{return samuraiOf(c).phase()==arcade::MatchPhase::MatchEnd;}));
+    l.run(300);arcade::Writer a,b;samuraiOf(h).encode(a);samuraiOf(c).encode(b);
+    CHECK(a.n==b.n && memcmp(a.buf,b.buf,a.n)==0 && l.maxLen<=250);
+    uint32_t seed=samuraiOf(h).seed;
+    h.in.again=true;l.run(300);CHECK(samuraiOf(h).seed==seed);
+    c.in.again=true;CHECK(l.runUntil(4000,[&]{return samuraiOf(h).seed!=seed;}));
+    CHECK(l.runUntil(10000,[&]{return bothPlaying(l);}));l.run(300);
+    CHECK(samuraiOf(h).swordPlayer==1-sword && samuraiOf(c).swordPlayer==1-sword && samuraiOf(c).score[0]==0);
+    for (int i=0;i<2;++i) CHECK(samuraiOf(c).fighters[i].x==samuraiOf(h).fighters[i].x);
+    l.cut=true;l.run(1000);CHECK(h.s.status()==Status::LinkLost && c.s.status()==Status::LinkLost);
+    float elapsed=samuraiOf(h).elapsed;l.run(500);CHECK(samuraiOf(h).elapsed==elapsed);
+    l.cut=false;CHECK(l.runUntil(2500,[&]{return bothPlaying(l);}));
+    c.s.leave();CHECK(l.runUntil(1000,[&]{return h.s.status()==Status::PeerLeft;}));
+    for(int variant=0;variant<2;++variant) {
+        Link isolated;arcade::GameInfo info=kSamuraiDuelInfo;
+        if(variant)++info.protoVer;else info.wireId=kBumperDuelInfo.wireId;
+        auto& x=isolated.add(kClient,0,&info);auto& y=isolated.add(kHost,0,&kSamuraiDuelInfo);
+        isolated.run(6000);CHECK(x.s.status()==Status::Searching && y.s.status()==Status::Searching);
+    }
+}
+
 int main() {
     testPairingClean();
     testPairingSimultaneousAnyOrder();
@@ -735,6 +788,8 @@ int main() {
     testBumperWireIsolation();
     testBumperOverNetwork(0,0,0);
     testBumperOverNetwork(0.2f,15,20);
+    testSamuraiOverNetwork(0,0,0);
+    testSamuraiOverNetwork(.2f,15,20);
     testGarbageDoesNotCrash();
     std::printf(failures ? "%d FAILURES\n" : "ALL PASSED\n", failures);
     return failures ? 1 : 0;

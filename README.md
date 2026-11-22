@@ -8,8 +8,9 @@
 
 - **Throwhalla** — aim by tilting the device, charge and throw weapons across a lava arena, and use powerups.
 - **Big Bump** — a portrait sumo game where players steer inflatable fighters, use bursts, and collect items.
+- **MoonDuel** — pixel-art samurai versus gunslinger on a moonlit bridge. Tilt to move and turn, tap/hold B for a short/high jump, and press A to attack. The grounded crescent slash reflects bullets, and the gun can fire while moving or airborne. In versus, first to five wins and weapons and outfits swap on rematch. In solo practice, you start with a random weapon and can keep scoring against an opponent that receives neutral input. See [rules and tuning](docs/samuraiduel.zh-CN.md) (Chinese).
 
-Both games support solo play and two StickS3 devices. On the launcher, B selects a game and A opens it. On the waiting screen, B starts solo; A returns to the launcher. Game controls are shown in each game. Shake the device twice quickly to open the exit prompt. On-screen text is currently English.
+All games support solo play and two StickS3 devices. On the launcher, B selects a game and A opens it. On the waiting screen, B starts solo; A returns to the launcher. Shake the device twice quickly to open the exit prompt, then press A to exit or B to cancel. In solo play the prompt stays open until you choose. On-screen text is currently English.
 
 ## Hardware
 
@@ -34,7 +35,7 @@ Connect the StickS3 and upload (replace `COM9` with its current port):
 .\.venv\Scripts\pio.exe run -e m5stack-sticks3 -t upload --upload-port COM9
 ```
 
-The first build downloads the ESP32 toolchain, Arduino framework, and M5Unified. If upload cannot connect, put the StickS3 into its USB bootloader using its side reset button, then retry. You can also build one game at a time with `dev-throwhalla` or `dev-bumperduel`.
+The first build downloads the ESP32 toolchain, Arduino framework, and M5Unified. If upload cannot connect, put the StickS3 into its USB bootloader using its side reset button, then retry. You can also build one game at a time with `dev-throwhalla`, `dev-bumperduel`, or `dev-samuraiduel`.
 
 ## Project structure
 

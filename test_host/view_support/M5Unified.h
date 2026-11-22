@@ -1,0 +1,52 @@
+#pragma once
+// Minimal host raster canvas for previewing the actual MoonDuel view without hardware.
+// Deliberately isolated on the preview compiler's include path; never used in firmware.
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+
+class M5Canvas {
+    std::array<uint16_t,240*135> pixels_{};
+    int left_=0,top_=0,right_=240,bottom_=135;
+public:
+    void setClipRect(int x,int y,int w,int h) { left_=x;top_=y;right_=x+w;bottom_=y+h; }
+    void clearClipRect() {left_=top_=0;right_=240;bottom_=135;}
+    void drawPixel(int x,int y,uint16_t col) {
+        if(x>=std::max(0,left_) && x<std::min(240,right_) && y>=std::max(0,top_) && y<std::min(135,bottom_)) pixels_[y*240+x]=col;
+    }
+    void fillRect(int x,int y,int w,int h,uint16_t col) {
+        for(int yy=y;yy<y+h;++yy)for(int xx=x;xx<x+w;++xx)drawPixel(xx,yy,col);
+    }
+    void drawFastHLine(int x,int y,int w,uint16_t col){fillRect(x,y,w,1,col);}
+    void drawFastVLine(int x,int y,int h,uint16_t col){fillRect(x,y,1,h,col);}
+    void drawRect(int x,int y,int w,int h,uint16_t col){
+        drawFastHLine(x,y,w,col);drawFastHLine(x,y+h-1,w,col);
+        drawFastVLine(x,y,h,col);drawFastVLine(x+w-1,y,h,col);
+    }
+    void drawLine(int x,int y,int endX,int endY,uint16_t col) {
+        int dx=abs(endX-x),dy=-abs(endY-y),sx=x<endX ? 1:-1,sy=y<endY ? 1:-1,error=dx+dy;
+        for(;;){drawPixel(x,y,col);if(x==endX && y==endY)break;int e=2*error;if(e>=dy){error+=dy;x+=sx;}if(e<=dx){error+=dx;y+=sy;}}
+    }
+    void fillTriangle(int ax, int ay, int bx, int by, int cx, int cy, uint16_t col) {
+        auto side = [](int x, int y, int x1, int y1, int x2, int y2) {
+            return (x2-x1)*(y-y1) - (y2-y1)*(x-x1);
+        };
+        for (int y = std::min({ay,by,cy}); y <= std::max({ay,by,cy}); ++y) {
+            for (int x = std::min({ax,bx,cx}); x <= std::max({ax,bx,cx}); ++x) {
+                const int a = side(x,y,ax,ay,bx,by), b = side(x,y,bx,by,cx,cy), c = side(x,y,cx,cy,ax,ay);
+                if ((a >= 0 && b >= 0 && c >= 0) || (a <= 0 && b <= 0 && c <= 0)) drawPixel(x,y,col);
+            }
+        }
+    }
+    void save(const char* file) {
+        FILE* f=fopen(file,"wb");if(!f)return;
+        fprintf(f,"P6\n240 135\n255\n");
+        for(auto col:pixels_) {
+            uint8_t r=((col>>11)&31)*255/31,g=((col>>5)&63)*255/63,b=(col&31)*255/31;
+            fputc(r,f);fputc(g,f);fputc(b,f);
+        }
+        fclose(f);
+    }
+};

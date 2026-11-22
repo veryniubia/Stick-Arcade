@@ -53,7 +53,6 @@ constexpr float WORLD_G = 260.0f;
 constexpr float PROJ_LIFE_SEC = 5.0f;
 constexpr int MAX_BOUNCES = 3;
 constexpr float OWNER_IMMUNE_SEC = 0.15f;
-constexpr float HIT_NOTICE_SEC = 0.7f;
 
 // The bomb never explodes on contact: the fuse starts at its first bounce, then the blast grows slowly.
 constexpr float BOMB_FUSE_SEC = 2.0f;

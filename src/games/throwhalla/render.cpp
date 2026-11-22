@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "core/display.h"
+#include "ui/gfx.h"
 
 namespace render {
 
@@ -202,17 +203,11 @@ void drawItemBody(ItemType type, int cx, int cy, float angle, float scale, bool 
 void drawPowerup(const Powerup& p) {
     if (p.type == PowerupType::None) return;
     const int x = static_cast<int>(p.x), y = static_cast<int>(p.y);
-    const uint16_t edge = p.type == PowerupType::Burger ? rgb(255, 175, 65) :
-                          p.type == PowerupType::Split ? rgb(230, 120, 255) :
+    const uint16_t edge = p.type == PowerupType::Split ? rgb(230, 120, 255) :
                           p.type == PowerupType::Lightning ? kYellow : rgb(120, 235, 255);
     switch (p.type) {
         case PowerupType::Burger:
-            canvas.fillCircle(x, y - 1, 5, edge);
-            canvas.fillRect(x - 5, y, 11, 2, rgb(95, 190, 65));
-            canvas.fillRect(x - 5, y + 2, 11, 2, kWoodDark);
-            canvas.fillRect(x - 4, y + 4, 9, 1, edge);
-            canvas.drawPixel(x - 2, y - 4, kWhite);
-            canvas.drawPixel(x + 2, y - 3, kWhite);
+            ui::drawBurger(x, y);
             break;
         case PowerupType::Split:
             canvas.drawLine(x - 4, y, x + 2, y - 4, edge);
@@ -394,44 +389,16 @@ void drawTurnBar(const Game& g, int local) {
 }
 
 void drawBanner(const Game& g, int local) {
-    const bool meHit = g.players[local].hitFlash > 1.0f - cfg::HIT_NOTICE_SEC;
-    const bool oppHit = g.players[1 - local].hitFlash > 1.0f - cfg::HIT_NOTICE_SEC;
+    const bool meHit = g.players[local].hitFlash > 1.0f - ui::kHitNoticeSeconds;
+    const bool oppHit = g.players[1 - local].hitFlash > 1.0f - ui::kHitNoticeSeconds;
     if (g.phase != Phase::MatchEnd && (meHit || oppHit)) {
-        canvas.setTextDatum(middle_center);
-        canvas.setTextSize(3);
-        if (meHit) {
-            canvas.setTextColor(rgb(0, 0, 0));
-            canvas.drawString("OUCH!", cfg::SCREEN_W / 2 + 2, 42);
-            canvas.setTextColor(rgb(255, 90, 80));
-            canvas.drawString("OUCH!", cfg::SCREEN_W / 2, 40);
-        }
-        if (oppHit) {
-            const int y = meHit ? 64 : 40;
-            canvas.setTextColor(rgb(0, 0, 0));
-            canvas.drawString("HIT!", cfg::SCREEN_W / 2 + 2, y + 2);
-            canvas.setTextColor(kYellow);
-            canvas.drawString("HIT!", cfg::SCREEN_W / 2, y);
-        }
-        canvas.setTextSize(1);
-        return;
-    }
-    const char* text = nullptr;
-    uint16_t color = kYellow;
-    if (g.phase == Phase::RoundEnd) {
-        if (g.mode == GameMode::Solo && !g.players[1].hit) { text = "MISS"; color = rgb(190, 192, 200); }
+        if (meHit) ui::hitNotice(true, cfg::SCREEN_W / 2, 40, 3);
+        if (oppHit) ui::hitNotice(false, cfg::SCREEN_W / 2, meHit ? 64 : 40, 3);
     } else if (g.phase == Phase::MatchEnd) {
-        const bool won = g.winner == local;
-        text = g.isDraw() ? "DRAW" : (won ? "YOU WIN" : "YOU LOSE");
-        color = won ? rgb(120, 255, 120) : rgb(255, 90, 80);
+        ui::matchResult(g.isDraw() ? -1 : g.winner, local, cfg::SCREEN_W / 2, 40, 3);
+    } else if (g.phase == Phase::RoundEnd && g.mode == GameMode::Solo && !g.players[1].hit) {
+        ui::shadowText("MISS", cfg::SCREEN_W / 2, 40, 3, rgb(190, 192, 200));
     }
-    if (!text) return;
-    canvas.setTextDatum(middle_center);
-    canvas.setTextSize(3);
-    canvas.setTextColor(rgb(0, 0, 0));
-    canvas.drawString(text, cfg::SCREEN_W / 2 + 2, 42);
-    canvas.setTextColor(color);
-    canvas.drawString(text, cfg::SCREEN_W / 2, 40);
-    canvas.setTextSize(1);
 }
 
 uint8_t g_prevHit[2] = {};

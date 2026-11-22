@@ -1,14 +1,19 @@
 #include "games/registry.h"
 
-#ifndef ONLY_GAME_BUMPERDUEL
+#if !defined(ONLY_GAME_BUMPERDUEL) && !defined(ONLY_GAME_SAMURAIDUEL)
 #include "games/throwhalla/throwhalla.h"
 #include "games/throwhalla/view.h"
 #endif
 
 
-#ifndef ONLY_GAME_THROWHALLA
+#if !defined(ONLY_GAME_THROWHALLA) && !defined(ONLY_GAME_SAMURAIDUEL)
 #include "games/bumperduel/bumperduel.h"
 #include "games/bumperduel/view.h"
+#endif
+
+#if !defined(ONLY_GAME_THROWHALLA) && !defined(ONLY_GAME_BUMPERDUEL)
+#include "games/samuraiduel/samuraiduel.h"
+#include "games/samuraiduel/view.h"
 #endif
 
 namespace registry {
@@ -16,11 +21,14 @@ namespace registry {
 namespace {
 
 const GameEntry kGames[] = {
-#ifndef ONLY_GAME_BUMPERDUEL
+#if !defined(ONLY_GAME_BUMPERDUEL) && !defined(ONLY_GAME_SAMURAIDUEL)
     {&kThrowhallaInfo, "THROWHALLA", throwhalla_view::init, throwhalla_view::drawCard, throwhalla_view::drawLobby},
 #endif
-#ifndef ONLY_GAME_THROWHALLA
+#if !defined(ONLY_GAME_THROWHALLA) && !defined(ONLY_GAME_SAMURAIDUEL)
     {&kBumperDuelInfo, "BIG BUMP", nullptr, bumperduel_view::drawCard, bumperduel_view::drawLobby},
+#endif
+#if !defined(ONLY_GAME_THROWHALLA) && !defined(ONLY_GAME_BUMPERDUEL)
+    {&kSamuraiDuelInfo, "MoonDuel", nullptr, samuraiduel_view::drawCard, samuraiduel_view::drawLobby},
 #endif
 };
 

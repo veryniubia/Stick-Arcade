@@ -48,4 +48,6 @@ The session layer is game-agnostic. HELLO pairing checks game wire ID and protoc
 
 ## Build variants
 
-`m5stack-sticks3` includes all registered games. `dev-throwhalla` and `dev-bumperduel` compile one game for faster iteration; `debug-all` enables serial debug controls and performance output. These are PlatformIO environments in `platformio.ini`.
+`m5stack-sticks3` includes all registered games. `dev-throwhalla`, `dev-bumperduel`, and `dev-samuraiduel` compile one game for faster iteration; `debug-all` enables serial debug controls and performance output. These are PlatformIO environments in `platformio.ini`.
+
+MoonDuel (`samuraiduel`, wire ID 5, protocol 5, landscape) owns its platform physics, grounded sword/parry rules, horizontal bullets, round resets, and rematch weapon swaps. Its snapshots use the existing host-authoritative session. `test_host/preview_samuraiduel.py` renders the actual view on a host raster canvas for visual checks and requires Pillow and the installed M5GFX font dependency.

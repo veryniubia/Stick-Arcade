@@ -8,8 +8,9 @@
 
 - **Throwhalla**：倾斜设备瞄准，在熔岩竞技场中蓄力投掷武器并使用道具。
 - **Big Bump**：竖屏双人相扑游戏，控制充气斗士移动、冲撞并收集道具。
+- **MoonDuel**：月下木桥上的像素风武士 VS 枪手。倾斜控制移动和朝向，B 跳跃（按住跳得更高），A 攻击。武士只能在地面或平台上挥出月牙斩，刀锋可以将子弹反射。枪手可移动和空中射击。联机先到 5 分获胜，双方再战时才交换武器和服饰。单人进场随机分配武器，可一直对无输入的对手练习并累计命中数。[玩法说明](docs/samuraiduel.zh-CN.md)。
 
-两款游戏都支持单人和两台 StickS3 联机。启动器中按 B 切换游戏卡片，按 A 进入；等待界面按 B 开始单人游戏，按 A 返回启动器。游戏内按键提示会显示对应操作。快速连续摇晃设备两次可打开退出确认。当前屏幕文字为英文。
+所有游戏都支持单人和两台 StickS3 联机。启动器中按 B 切换游戏卡片，按 A 进入；等待界面按 B 开始单人游戏，按 A 返回启动器。游戏内快速连续摇晃设备两次打开退出确认，按 A 退出、按 B 取消。单人退出提示会等待按键。当前屏幕文字为英文。
 
 ## 硬件
 
@@ -34,7 +35,7 @@ python -m venv .venv
 .\.venv\Scripts\pio.exe run -e m5stack-sticks3 -t upload --upload-port COM9
 ```
 
-首次构建会下载 ESP32 工具链、Arduino 框架和 M5Unified。若无法连接设备，请用侧边复位键让 StickS3 进入 USB Bootloader 后重试。也可以用 `dev-throwhalla` 或 `dev-bumperduel` 单独构建某一款游戏。
+首次构建会下载 ESP32 工具链、Arduino 框架和 M5Unified。若无法连接设备，请用侧边复位键让 StickS3 进入 USB Bootloader 后重试。也可以用 `dev-throwhalla`、`dev-bumperduel` 或 `dev-samuraiduel` 单独构建某一款游戏。
 
 ## 项目结构
 

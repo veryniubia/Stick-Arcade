@@ -7,6 +7,7 @@
 #include "core/debug.h"
 #include "core/display.h"
 #include "core/input.h"
+#include "core/offline_trace.h"
 #include "core/platform.h"
 #include "core/settings.h"
 #include "core/sound.h"
@@ -25,7 +26,7 @@ enum class Stage : uint8_t { Lobby, Solo, Online };
 constexpr uint32_t kClosedShowMs = 1500;
 constexpr uint32_t kPingShowMs = 5000;
 constexpr uint32_t kSoloHintMs = 10000;   // after this long without an opponent the SOLO hint starts to blink
-constexpr uint32_t kExitAskMs = 3000;     // the confirmation closes by itself
+constexpr uint32_t kOnlineExitAskMs = 3000;
 constexpr uint32_t kJoinWindowMs = 10000; // how long a solo player stays joinable after pressing A on OPP FOUND
 
 const registry::GameEntry* g_entry = nullptr;
@@ -76,6 +77,7 @@ PadInput makePad() {
 }
 
 void openExitAsk(uint32_t now) {
+    offline_trace::record("exit_prompt");
     g_exitAsk = true;
     g_exitAskMs = now;
     g_frozenA = (input::aHeld() && g_aArmed) || debug::charging();
@@ -86,8 +88,13 @@ void openExitAsk(uint32_t now) {
 
 void closeExitAsk() {
     g_exitAsk = false;
-    g_aSkip += input::aCount() - g_frozenACount;
-    g_bSkip += input::bCount() + debug::extraB() - g_frozenBCount;
+    const uint8_t aPresses = input::aCount() - g_frozenACount;
+    const uint8_t bPresses = input::bCount() + debug::extraB() - g_frozenBCount;
+    g_aSkip += aPresses;
+    g_bSkip += bPresses;
+    // A new press used in the dialog must also stay out of play while held.
+    if (aPresses && input::aHeld()) g_aArmed = false;
+    if (bPresses && input::bHeld()) g_bArmed = false;
 }
 
 void pumpRadio(uint32_t now) {
@@ -104,6 +111,7 @@ void pumpRadio(uint32_t now) {
 }
 
 void startSolo() {
+    offline_trace::record("solo");
     if (g_entry->info->portrait) g_bArmed = false;
     display::setPortrait(g_entry->info->portrait);
     game().begin(arcade::Mode::Solo, esp_random());
@@ -135,11 +143,11 @@ bool updateExitAsk(uint32_t now, bool shake, bool aPress, bool bPress) {
         if (shake) openExitAsk(now);
         return false;
     }
-    if (aPress) {
+    if (aPress || input::aCount() != g_frozenACount) {
         closeExitAsk();
         return true;
     }
-    if (bPress || now - g_exitAskMs > kExitAskMs) closeExitAsk();
+    if (bPress || (g_stage == Stage::Online && now - g_exitAskMs > kOnlineExitAskMs)) closeExitAsk();
     return false;
 }
 
@@ -272,8 +280,13 @@ void begin(const registry::GameEntry& entry) {
     g_exitAsk = false;
     g_aSkip = g_bSkip = 0;
     g_radioOk = false;
-    if (!g_gi.game) return;
+    offline_trace::record("lobby", entry.info->wireId);
+    if (!g_gi.game) {
+        offline_trace::record("game_alloc_fail");
+        return;
+    }
     g_radioOk = net_espnow::begin();
+    offline_trace::record("radio", g_radioOk);
     if (g_radioOk) {
         g_session.begin(&net_espnow::transport(), esp_random(), millis(), *entry.info, g_gi.game);
         g_session.setJoinable(true);
@@ -281,6 +294,7 @@ void begin(const registry::GameEntry& entry) {
 }
 
 void end() {
+    offline_trace::record("play_end");
     debug::releaseControls();
     display::setPortrait(false);
     net_espnow::end();
@@ -298,13 +312,13 @@ bool update(float dt) {
     if (!input::aHeld()) g_aArmed = true;
     if (!input::bHeld()) g_bArmed = true;
 
-    pumpRadio(now);
     const bool askWasOpen = g_exitAsk;
 
     net::LocalInput li;
     li.pad = makePad();
 
     if (g_stage == Stage::Lobby) {
+        pumpRadio(now);
         if (g_radioOk) {
             g_session.update(now, li);
             if (g_session.status() != net::Status::Searching) {
@@ -312,7 +326,10 @@ bool update(float dt) {
                 return false;
             }
         }
-        if (aPress) return true;
+        if (aPress) {
+            offline_trace::record("lobby_back");
+            return true;
+        }
         if (bPress) startSolo();
         return false;
     }
@@ -321,9 +338,11 @@ bool update(float dt) {
     const bool confirmed = updateExitAsk(now, shake, aPress, bPress);
     if (askWasOpen) aPress = bPress = false;
     if (confirmed) {
+        offline_trace::record("exit_confirm", g_stage == Stage::Online);
         if (g_stage == Stage::Online) g_session.leave();
         return true;
     }
+    pumpRadio(now);
     li.pad = makePad();
     li.again = aPress;
 
@@ -367,7 +386,10 @@ bool update(float dt) {
         g_playingSinceMs = now;
         sound::playUi(sound::Ui::Refresh);
     }
-    g_lastStatus = st;
+    if (st != g_lastStatus) {
+        offline_trace::record("online_status", static_cast<int>(st), static_cast<int>(g_session.role()));
+        g_lastStatus = st;
+    }
 
     if (st == net::Status::PeerLeft || st == net::Status::TimedOut) {
         if (g_closedAtMs == 0) {
