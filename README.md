@@ -9,13 +9,15 @@
 - **Throwhalla** — aim by tilting the device, charge and throw weapons across a lava arena, and use powerups.
 - **Big Bump** — a portrait sumo game where players steer inflatable fighters, use bursts, and collect items.
 - **MoonDuel** — pixel-art samurai versus gunslinger on a moonlit bridge. Tilt to move and turn, tap/hold B for a short/high jump, and press A to attack. The grounded crescent slash reflects bullets, and the gun can fire while moving or airborne. In versus, first to five wins and weapons and outfits swap on rematch. In solo practice, you start with a random weapon and can keep scoring against an opponent that receives neutral input. See [rules and tuning](docs/samuraiduel.zh-CN.md) (Chinese).
+- **MidDiff** (needs the joystick) — a first-person sniper duel across a mid-map gap. Move with the joystick, turn the device to look (amplified, 180° ahead, with limited up/down), A fires an instant shot, hold B to crouch behind the half-height cover while stamina lasts. First to three rounds wins; solo is endless target practice. See [rules and tuning](docs/middiff.zh-CN.md) (Chinese).
 
-All games support solo play and two StickS3 devices. On the launcher, B selects a game and A opens it. On the waiting screen, B starts solo; A returns to the launcher. Shake the device twice quickly to open the exit prompt, then press A to exit or B to cancel. In solo play the prompt stays open until you choose. On-screen text is currently English.
+All games support solo play and two StickS3 devices. On the launcher, B selects a game and A opens it. Games that need the joystick are shown in their own orange group with a joystick badge, a "JOYSTICK REQUIRED" ribbon, and a ready/not-found status; they cannot be opened without the unit. On the waiting screen, B starts solo; A returns to the launcher. Shake the device twice quickly to open the exit prompt, then press A to exit or B to cancel. In solo play the prompt stays open until you choose. On-screen text is currently English.
 
 ## Hardware
 
 - M5Stack StickS3 with a USB-C data cable.
 - For multiplayer, use two StickS3 devices with the same firmware/game protocol version.
+- MidDiff needs an [M5Stack Unit Joystick2](https://shop.m5stack.com/products/i2c-joystick-2-unit-stm32g030) on the Grove port (I2C `0x63`), mounted on the left of the device held in landscape. The Grove 5 V output is switched on only while a joystick game is selected.
 - A Windows PC is the documented development setup. PlatformIO, the ESP32 Arduino platform, and M5Unified are used to build the firmware.
 
 ## Build and upload
@@ -35,7 +37,7 @@ Connect the StickS3 and upload (replace `COM9` with its current port):
 .\.venv\Scripts\pio.exe run -e m5stack-sticks3 -t upload --upload-port COM9
 ```
 
-The first build downloads the ESP32 toolchain, Arduino framework, and M5Unified. If upload cannot connect, put the StickS3 into its USB bootloader using its side reset button, then retry. You can also build one game at a time with `dev-throwhalla`, `dev-bumperduel`, or `dev-samuraiduel`.
+The first build downloads the ESP32 toolchain, Arduino framework, and M5Unified. If upload cannot connect, put the StickS3 into its USB bootloader using its side reset button, then retry. You can also build one game at a time with `dev-throwhalla`, `dev-bumperduel`, `dev-samuraiduel`, or `dev-middiff`.
 
 ## Project structure
 

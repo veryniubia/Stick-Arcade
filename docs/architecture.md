@@ -7,7 +7,7 @@ Stick Arcade is a single firmware image containing a launcher and multiple games
 | Path | Responsibility |
 |---|---|
 | `src/main.cpp` | Initializes M5Unified and platform services; runs the launcher/settings/play screen loop. |
-| `src/core/` | Shared types and services: `IGame`, fixed 60 Hz tick, input pads, wire reader/writer, per-game memory arena, display buffers, sensors, sound, and persistent settings. |
+| `src/core/` | Shared types and services: `IGame`, fixed 60 Hz tick, input pads, gyro look control (`gyro_look.h`), the Joystick2 driver (`joystick.*`), wire reader/writer, per-game memory arena, display buffers, sensors, sound, and persistent settings. |
 | `src/ui/` | Launcher, settings page, and the waiting/countdown/solo/online/exit flow. |
 | `src/net/net_session.*` | Hardware-independent matchmaking/session state, host authority, snapshots, rematches, and link-loss handling. |
 | `src/net/net_espnow.*` | ESP-NOW and Wi-Fi radio glue. |
@@ -48,6 +48,6 @@ The session layer is game-agnostic. HELLO pairing checks game wire ID and protoc
 
 ## Build variants
 
-`m5stack-sticks3` includes all registered games. `dev-throwhalla`, `dev-bumperduel`, and `dev-samuraiduel` compile one game for faster iteration; `debug-all` enables serial debug controls and performance output. These are PlatformIO environments in `platformio.ini`.
+`m5stack-sticks3` includes all registered games. `dev-throwhalla`, `dev-bumperduel`, `dev-samuraiduel`, and `dev-middiff` compile one game for faster iteration; `debug-all` enables serial debug controls and performance output. These are PlatformIO environments in `platformio.ini`.
 
 MoonDuel (`samuraiduel`, wire ID 5, protocol 5, landscape) owns its platform physics, grounded sword/parry rules, horizontal bullets, round resets, and rematch weapon swaps. Its snapshots use the existing host-authoritative session. `test_host/preview_samuraiduel.py` renders the actual view on a host raster canvas for visual checks and requires Pillow and the installed M5GFX font dependency.

@@ -8,6 +8,7 @@
 #include "core/debug.h"
 #include "core/display.h"
 #include "core/input.h"
+#include "core/joystick.h"
 #include "core/offline_trace.h"
 #include "core/platform.h"
 #include "core/settings.h"
@@ -60,6 +61,28 @@ void debugPoll() {
                 startPlay(index);
                 if (ch == 'g' || ch == 'G' || ch == 'Z') d.bPress = true;  // B on the waiting screen = solo
             }
+        } else if (ch == 'y' || ch == 'Y') {
+            // First game that needs the joystick: y = waiting screen, Y = solo.
+            for (int i = 0; i < registry::count(); ++i) {
+                if (!registry::get(i).info->needsJoystick) continue;
+                if (g_screen == Screen::Play) play::end();
+                joystick::setPower(true);
+                startPlay(i);
+                if (ch == 'Y') d.bPress = true;
+                break;
+            }
+        } else if (ch == 'J') {
+            uint8_t a = 0, b = 0;
+            joystick::raw(a, b);
+            Serial.printf("JOY powered=%d ok=%d raw=%u,%u x=%d y=%d btn=%d presses=%u look yaw=%.2f pitch=%.2f\n",
+                          joystick::powered() ? 1 : 0, joystick::ok() ? 1 : 0, a, b, joystick::x(), joystick::y(),
+                          joystick::buttonHeld() ? 1 : 0, joystick::pressCount(), input::lookYawDeg(),
+                          input::lookPitchDeg());
+        } else if (ch == 'W') {
+            float gx = 0, gy = 0, gz = 0, ax = 0, ay = 0, az = 0;
+            M5.Imu.getGyro(&gx, &gy, &gz);
+            M5.Imu.getAccel(&ax, &ay, &az);
+            Serial.printf("RAW g=%.3f,%.3f,%.3f a=%.3f,%.3f,%.3f\n", gx, gy, gz, ax, ay, az);
         } else if (ch == 'm') {
             if (g_screen == Screen::Play) play::end();
             goLauncher();

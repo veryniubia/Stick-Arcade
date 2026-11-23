@@ -3,6 +3,8 @@
 #include <M5Unified.h>
 #include <math.h>
 
+#include "core/gyro_look.h"
+#include "core/joystick.h"
 #include "core/shake.h"
 #include "core/portrait_tilt.h"
 
@@ -12,6 +14,10 @@ namespace {
 constexpr float kImuAimSign = 1.0f;
 
 arcade::PortraitTilt g_portraitTilt;
+arcade::GyroLook g_look;
+bool g_lookOn = false;
+uint32_t g_lookUs = 0;
+uint8_t g_stickPresses = 0;
 float g_tilt = 0.0f;  // filtered device tilt in degrees
 float g_offset = 0.0f;
 bool g_primed = false;
@@ -42,10 +48,24 @@ void begin() {
 void update() {
     if (M5.BtnA.wasPressed()) ++g_aCount;
     if (M5.BtnB.wasPressed()) ++g_bCount;
+    joystick::update();
+    if (joystick::pressCount() != g_stickPresses) {
+        g_stickPresses = joystick::pressCount();
+        g_look.recenter();
+    }
     if (!g_imuOk) return;
     M5.Imu.update();
     float ax = 0, ay = 0, az = 0;
     if (!M5.Imu.getAccel(&ax, &ay, &az)) return;
+
+    if (g_lookOn) {
+        float gx = 0, gy = 0, gz = 0;
+        const uint32_t nowUs = micros();
+        if (M5.Imu.getGyro(&gx, &gy, &gz)) {
+            g_look.update(ax, ay, az, gx, gy, gz, (nowUs - g_lookUs) * 1e-6f);
+        }
+        g_lookUs = nowUs;
+    }
 
     const float magnitude = sqrtf(ax * ax + ay * ay + az * az);
     if (g_shake.update(millis(), fabsf(magnitude - 1.0f))) {
@@ -92,5 +112,19 @@ bool shaken() {
     g_shaken = false;
     return s;
 }
+
+void beginLook(float yawGainCenter, float yawGainEdge, float pitchGainCenter, float pitchGainEdge,
+               float yawLimit, float pitchLimit) {
+    g_look.reset();
+    g_look.configure(yawGainCenter, yawGainEdge, pitchGainCenter, pitchGainEdge, yawLimit, pitchLimit);
+    g_stickPresses = joystick::pressCount();
+    g_lookUs = micros();
+    g_lookOn = true;
+}
+
+void endLook() { g_lookOn = false; }
+void recenterLook() { g_look.recenter(); }
+float lookYawDeg() { return g_look.yaw(); }
+float lookPitchDeg() { return g_look.pitch(); }
 
 }  // namespace input

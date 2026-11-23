@@ -16,10 +16,12 @@ TESTS = {
                   'src/games/throwhalla/throwhalla.cpp', 'src/games/throwhalla/game.cpp'],
     'bumperduel_test': ['src/games/bumperduel/bumperduel.cpp'],
     'samuraiduel_test': ['src/games/samuraiduel/samuraiduel.cpp'],
+    'middiff_test': ['src/games/middiff/middiff.cpp'],
     'net_test': ['src/net/net_session.cpp', 'src/core/game_instance.cpp',
                  'src/games/throwhalla/throwhalla.cpp', 'src/games/throwhalla/game.cpp',
                  'src/games/bumperduel/bumperduel.cpp',
-                 'src/games/samuraiduel/samuraiduel.cpp'],
+                 'src/games/samuraiduel/samuraiduel.cpp',
+                 'src/games/middiff/middiff.cpp'],
 }
 
 

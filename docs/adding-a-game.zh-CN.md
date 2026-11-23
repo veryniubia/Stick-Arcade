@@ -15,6 +15,8 @@
 
 边沿触发操作使用 `PadInput` 的按键计数器（`aCount`、`bCount`）；布尔量表示按键持续按下。对局开始时由 `prime()` 同步计数。单人模式下玩家 1 没有真人输入。可选的 `localInput()` 只用于即时本地显示，不得修改权威游戏状态。
 
+需要 Unit Joystick2 摇杆的游戏设置 `GameInfo::needsJoystick`。启动器会把它放进单独的摇杆分组，没有摇杆时拒绝进入；平台会填充 `PadInput::stickX/stickY`，并用 `aim`（视角偏航）和 `pitch`（视角俯仰，受 `pad::kLookYawLimit`/`kLookPitchLimit` 限制）代替倾斜角。游戏中摇杆消失时，平台会提示错误、退出联机并返回启动器。这类游戏请排在 `src/games/registry.cpp` 的最后。该输入改变了会话的输入包格式，联机两端需要相同固件。
+
 ## 2. 添加画面与启动器卡片
 
 将硬件绘制和音效放在 `<name>_view.cpp` 与 `view.h` 中。使用平台画布绘制，不要直接访问 M5 硬件。实现游戏画面、事件音效、120×78 启动器卡片和等待界面背景。启动器名称应简短（最多 10 个字符，仅英文和数字），屏幕文字尽量精炼。可使用 `tools/png2c.py` 将 PNG 转为嵌入资源（16 色调色板，可选 RLE）。

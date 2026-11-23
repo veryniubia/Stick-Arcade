@@ -7,7 +7,7 @@ Stick Arcade 是包含启动器和多款游戏的单一固件。平台负责硬�
 | 路径 | 职责 |
 |---|---|
 | `src/main.cpp` | 初始化 M5Unified 和平台服务，运行启动器、设置与游戏界面循环。 |
-| `src/core/` | 共用类型与服务：`IGame`、固定 60 Hz 步进、输入、网络读写器、游戏内存 Arena、显示缓冲、传感器、声音和持久化设置。 |
+| `src/core/` | 共用类型与服务：`IGame`、固定 60 Hz 步进、输入、陀螺仪视角控制（`gyro_look.h`）、Joystick2 摇杆驱动（`joystick.*`）、网络读写器、游戏内存 Arena、显示缓冲、传感器、声音和持久化设置。 |
 | `src/ui/` | 启动器、设置页，以及等待、倒计时、单人、联机和退出流程。 |
 | `src/net/net_session.*` | 与硬件无关的匹配和会话状态、主机权威模拟、状态快照、再战和断线处理。 |
 | `src/net/net_espnow.*` | ESP-NOW 与 Wi-Fi 无线连接适配。 |
@@ -48,6 +48,6 @@ StickS3 硬件
 
 ## 构建环境
 
-`m5stack-sticks3` 包含全部注册游戏；`dev-throwhalla`、`dev-bumperduel` 和 `dev-samuraiduel` 用于单游戏快速迭代；`debug-all` 启用串口调试控制和性能输出。具体配置见 `platformio.ini`。
+`m5stack-sticks3` 包含全部注册游戏；`dev-throwhalla`、`dev-bumperduel`、`dev-samuraiduel` 和 `dev-middiff` 用于单游戏快速迭代；`debug-all` 启用串口调试控制和性能输出。具体配置见 `platformio.ini`。
 
 MoonDuel（`samuraiduel`，wire ID 5，协议 5，横屏）在游戏内部实现平台物理、落地刀击与弹反、水平子弹、小回合复位和再战换武器，并复用现有主机权威会话。`test_host/preview_samuraiduel.py` 通过主机端像素画布渲染实际绘制代码，供画面检查，需要 Pillow 和已安装的 M5GFX 字体依赖。

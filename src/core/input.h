@@ -26,4 +26,14 @@ uint8_t bCount();
 // True once after the device was shaken twice in a row (the exit gesture). Cleared by reading.
 bool shaken();
 
+// Gyro view control for games that need the joystick. beginLook() starts the integration (see GyroLook::configure
+// for the gains and limits); keep the device still for a moment afterwards so the gyro bias can settle. Pressing
+// the joystick recentres the view.
+void beginLook(float yawGainCenter, float yawGainEdge, float pitchGainCenter, float pitchGainEdge,
+               float yawLimit, float pitchLimit);
+void endLook();
+void recenterLook();
+float lookYawDeg();    // positive = right
+float lookPitchDeg();  // positive = up
+
 }  // namespace input

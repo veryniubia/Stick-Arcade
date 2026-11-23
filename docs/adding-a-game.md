@@ -15,6 +15,8 @@ Create a class derived from `arcade::IGame` (`src/core/game_iface.h`). Implement
 
 Use `PadInput` press counters (`aCount` and `bCount`) for edge-triggered actions; held booleans represent held controls. `prime()` synchronizes the counters at match start. Player 1 has no human input in Solo mode. Optional `localInput()` is for immediate local presentation; it must not alter authoritative state.
 
+A game that needs the Unit Joystick2 sets `GameInfo::needsJoystick`. The launcher then shows it in the separate joystick group, refuses to open it while the unit is missing, and the platform fills `PadInput::stickX/stickY` and, instead of the tilt, `aim` (view yaw) and `pitch` (view pitch, limited to `pad::kLookYawLimit`/`kLookPitchLimit`). If the unit disappears during play the platform shows an error, leaves an online match and returns to the launcher. List such games after all others in `src/games/registry.cpp`. This input changes the session's input packet, so both devices need the same firmware.
+
 ## 2. Add a view and launcher artwork
 
 Keep hardware drawing and sound in `<name>_view.cpp` and `view.h`. Draw through the platform canvas; don't access M5 hardware directly. Implement the game draw, event sound, 120×78 launcher card, and waiting-screen lobby background. Keep the launcher name short (up to 10 characters; English and digits only) and on-screen text concise. Artwork can be embedded from PNG using `tools/png2c.py` (16-color palette, optional RLE).

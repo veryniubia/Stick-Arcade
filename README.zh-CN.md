@@ -9,13 +9,15 @@
 - **Throwhalla**：倾斜设备瞄准，在熔岩竞技场中蓄力投掷武器并使用道具。
 - **Big Bump**：竖屏双人相扑游戏，控制充气斗士移动、冲撞并收集道具。
 - **MoonDuel**：月下木桥上的像素风武士 VS 枪手。倾斜控制移动和朝向，B 跳跃（按住跳得更高），A 攻击。武士只能在地面或平台上挥出月牙斩，刀锋可以将子弹反射。枪手可移动和空中射击。联机先到 5 分获胜，双方再战时才交换武器和服饰。单人进场随机分配武器，可一直对无输入的对手练习并累计命中数。[玩法说明](docs/samuraiduel.zh-CN.md)。
+- **MidDiff**（需要摇杆）：第一人称“中门对狙”。摇杆前后左右移动，转动设备改变视角（有角度放大，正前方 180°，可小幅上下看），A 瞬发射击，按住 B 蹲在半高掩体后（消耗体力）。联机先赢 3 回合，单人是无限靶场练习。[玩法说明](docs/middiff.zh-CN.md)。
 
-所有游戏都支持单人和两台 StickS3 联机。启动器中按 B 切换游戏卡片，按 A 进入；等待界面按 B 开始单人游戏，按 A 返回启动器。游戏内快速连续摇晃设备两次打开退出确认，按 A 退出、按 B 取消。单人退出提示会等待按键。当前屏幕文字为英文。
+所有游戏都支持单人和两台 StickS3 联机。启动器中按 B 切换游戏卡片，按 A 进入；需要摇杆的游戏单独成组，用橙色虚线分隔并带摇杆图标，卡片底部有“JOYSTICK REQUIRED”标签和就绪/未检测到状态，没有摇杆时无法进入。等待界面按 B 开始单人游戏，按 A 返回启动器。游戏内快速连续摇晃设备两次打开退出确认，按 A 退出、按 B 取消。单人退出提示会等待按键。当前屏幕文字为英文。
 
 ## 硬件
 
 - M5Stack StickS3 和可传输数据的 USB-C 线。
 - 双人联机需要两台安装了兼容固件和游戏协议版本的 StickS3。
+- MidDiff 需要 [M5Stack Unit Joystick2](https://shop.m5stack.com/products/i2c-joystick-2-unit-stm32g030) 接在 Grove 接口（I2C 地址 `0x63`），横屏握持时摇杆在左手边。仅在选中需要摇杆的游戏时才打开 Grove 的 5 V 输出。
 - 当前提供 Windows 开发流程；固件使用 PlatformIO、ESP32 Arduino 平台和 M5Unified 构建。
 
 ## 构建和烧录
@@ -35,7 +37,7 @@ python -m venv .venv
 .\.venv\Scripts\pio.exe run -e m5stack-sticks3 -t upload --upload-port COM9
 ```
 
-首次构建会下载 ESP32 工具链、Arduino 框架和 M5Unified。若无法连接设备，请用侧边复位键让 StickS3 进入 USB Bootloader 后重试。也可以用 `dev-throwhalla`、`dev-bumperduel` 或 `dev-samuraiduel` 单独构建某一款游戏。
+首次构建会下载 ESP32 工具链、Arduino 框架和 M5Unified。若无法连接设备，请用侧边复位键让 StickS3 进入 USB Bootloader 后重试。也可以用 `dev-throwhalla`、`dev-bumperduel`、`dev-samuraiduel` 或 `dev-middiff` 单独构建某一款游戏。
 
 ## 项目结构
 

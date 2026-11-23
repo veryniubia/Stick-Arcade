@@ -7,6 +7,7 @@
 #include "core/debug.h"
 #include "core/display.h"
 #include "core/input.h"
+#include "core/joystick.h"
 #include "core/offline_trace.h"
 #include "core/platform.h"
 #include "core/settings.h"
@@ -54,6 +55,7 @@ uint8_t g_frozenACount = 0;
 uint8_t g_frozenBCount = 0;
 uint8_t g_aSkip = 0;  // presses made while the confirmation was open belong to the confirmation, not to the game
 uint8_t g_bSkip = 0;
+uint32_t g_stickLostMs = 0;  // when a game that needs the joystick noticed it was gone (0 = present)
 
 arcade::IGame& game() { return *g_gi.game; }
 
@@ -61,7 +63,16 @@ arcade::IGame& game() { return *g_gi.game; }
 // charge in progress neither fires nor stops, and presses made for the confirmation never reach the game.
 PadInput makePad() {
     PadInput p;
-    p.aim = debug::aim(g_entry->info->portrait ? input::driveTiltDeg() : input::tiltDeg() * settings::aimGain());
+    if (g_entry->info->needsJoystick) {
+        p.aim = input::lookYawDeg();
+        p.pitch = input::lookPitchDeg();
+        if (!g_exitAsk) {
+            p.stickX = joystick::x();
+            p.stickY = joystick::y();
+        }
+    } else {
+        p.aim = debug::aim(g_entry->info->portrait ? input::driveTiltDeg() : input::tiltDeg() * settings::aimGain());
+    }
     if (g_exitAsk) {
         p.a = g_frozenA;
         p.b = g_frozenB;
@@ -95,6 +106,8 @@ void closeExitAsk() {
     // A new press used in the dialog must also stay out of play while held.
     if (aPresses && input::aHeld()) g_aArmed = false;
     if (bPresses && input::bHeld()) g_bArmed = false;
+    // Shaking the device to ask for the exit also moved the view: start again from the centre.
+    if (g_entry->info->needsJoystick) input::recenterLook();
 }
 
 void pumpRadio(uint32_t now) {
@@ -113,6 +126,7 @@ void pumpRadio(uint32_t now) {
 void startSolo() {
     offline_trace::record("solo");
     if (g_entry->info->portrait) g_bArmed = false;
+    if (g_entry->info->needsJoystick) input::recenterLook();
     display::setPortrait(g_entry->info->portrait);
     game().begin(arcade::Mode::Solo, esp_random());
     // The B press that selected SOLO belongs to the waiting screen, as do older press counters.
@@ -279,8 +293,14 @@ void begin(const registry::GameEntry& entry) {
     g_bArmed = true;
     g_exitAsk = false;
     g_aSkip = g_bSkip = 0;
+    g_stickLostMs = 0;
     g_radioOk = false;
     offline_trace::record("lobby", entry.info->wireId);
+    if (entry.info->needsJoystick) {
+        // Amplified view control: slow near the centre for fine aim, fast towards the limits (see core/gyro_look.h).
+        const float gain = settings::aimGain();
+        input::beginLook(0.35f * gain, 1.65f * gain, 0.33f * gain, 1.0f * gain, pad::kLookYawLimit, pad::kLookPitchLimit);
+    }
     if (!g_gi.game) {
         offline_trace::record("game_alloc_fail");
         return;
@@ -296,6 +316,7 @@ void begin(const registry::GameEntry& entry) {
 void end() {
     offline_trace::record("play_end");
     debug::releaseControls();
+    input::endLook();
     display::setPortrait(false);
     net_espnow::end();
     g_radioOk = false;
@@ -306,6 +327,16 @@ void end() {
 bool update(float dt) {
     if (!g_gi.game) return true;  // out of memory: back to the launcher
     const uint32_t now = millis();
+    // A game that needs the joystick cannot go on without it: say so, tell the opponent, and go back.
+    if (g_entry->info->needsJoystick && !joystick::ok()) {
+        if (g_stickLostMs == 0) {
+            g_stickLostMs = now;
+            offline_trace::record("stick_lost", static_cast<int>(g_stage));
+            sound::playUi(sound::Ui::Denied);
+            if (g_stage == Stage::Online) g_session.leave();
+        }
+        return now - g_stickLostMs > kClosedShowMs;
+    }
     bool aPress = input::aPressed() || debug::aPress();
     bool bPress = input::bPressed() || debug::bPress();
     const bool shake = input::shaken() || debug::shake();
@@ -385,6 +416,7 @@ bool update(float dt) {
     if (st == net::Status::Playing && g_lastStatus != net::Status::Playing && g_lastStatus != net::Status::LinkLost) {
         g_playingSinceMs = now;
         sound::playUi(sound::Ui::Refresh);
+        if (g_entry->info->needsJoystick) input::recenterLook();
     }
     if (st != g_lastStatus) {
         offline_trace::record("online_status", static_cast<int>(st), static_cast<int>(g_session.role()));
@@ -419,6 +451,12 @@ void draw() {
         drawOnlineOverlays(now);
     }
     if (g_exitAsk) drawExitAsk();
+    if (g_stickLostMs != 0) {
+        const int cx = display::width() / 2;
+        drawBox(150, 44, 46);
+        ui::shadowText("JOYSTICK LOST", cx, 62, 1, ui::red());
+        ui::shadowText("BACK TO MENU", cx, 78, 1, ui::kWhite);
+    }
 }
 
 #ifdef DEBUG_REMOTE

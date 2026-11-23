@@ -17,6 +17,7 @@
 #include "games/bumperduel/bumperduel.h"
 #include "games/throwhalla/throwhalla.h"
 #include "games/samuraiduel/samuraiduel.h"
+#include "games/middiff/middiff.h"
 
 // The tests never draw: the view half of the games is not linked.
 void ThrowhallaGame::draw(int, const arcade::DrawCtx&) {}
@@ -26,6 +27,8 @@ void BumperDuelGame::draw(int, const arcade::DrawCtx&) {}
 void BumperDuelGame::sfx(uint32_t) {}
 void SamuraiDuelGame::draw(int, const arcade::DrawCtx&) {}
 void SamuraiDuelGame::sfx(uint32_t) {}
+void MidDiffGame::draw(int, const arcade::DrawCtx&) {}
+void MidDiffGame::sfx(uint32_t) {}
 
 static int failures = 0;
 
@@ -613,8 +616,8 @@ static void testIgnoresForeignAndStalePackets() {
     CHECK(l.runUntil(8000, [&] { return h.s.status() == Status::Playing && c.s.status() == Status::Playing; }));
 
     // A forged input with the right session id but from another MAC must not move the host's opponent.
-    uint8_t pkt[15] = {0xD7, 4, static_cast<uint8_t>(h.s.sid_ & 0xFF), static_cast<uint8_t>(h.s.sid_ >> 8),
-                       0, 0, 0, 0, 0, 0, 0x10, 0x27, 1, 0, 0};  // aim = 100.00, A held
+    uint8_t pkt[19] = {0xD7, 4, static_cast<uint8_t>(h.s.sid_ & 0xFF), static_cast<uint8_t>(h.s.sid_ >> 8),
+                       0, 0, 0, 0, 0, 0, 0x10, 0x27, 1, 0, 0, 0, 0, 0, 0};  // aim = 100.00, A held
     h.s.remotePad_.aim = 0.0f;
     h.s.onReceive(x.mac, pkt, sizeof(pkt), l.now);
     CHECK(h.s.remotePad_.aim == 0.0f);
@@ -761,6 +764,56 @@ static void testSamuraiOverNetwork(float loss, int latency, int jitter) {
     }
 }
 
+static MidDiffGame& midOf(Endpoint& e) { return *static_cast<MidDiffGame*>(e.gi.game); }
+// Points the pad of `shooter` at the opponent's head.
+static void aimAtHead(PadInput& pad, const MidDiffGame& g, int shooter) {
+    const float f = MidDiffGame::facing(shooter);
+    const auto& me = g.players[shooter];
+    const auto& foe = g.players[1 - shooter];
+    const float dx = (foe.x - me.x) * f, dz = (foe.z - me.z) * f;
+    pad.aim = std::atan2(dx, dz) * 57.29578f;
+    pad.pitch = std::atan2(MidDiffGame::bodyHeight(foe.crouch) - 0.2f - MidDiffGame::eyeHeight(me.crouch), std::hypot(dx, dz)) * 57.29578f;
+}
+static void testMidDiffOverNetwork(float loss, int latency, int jitter) {
+    Link l;l.loss=loss;l.latency=latency;l.jitter=jitter;l.rng=77;
+    auto& c=l.add(kClient,0,&kMidDiffInfo);auto& h=l.add(kHost,0,&kMidDiffInfo);
+    CHECK(l.runUntil(30000,[&]{return bothPlaying(l);}));l.run(300);
+    CHECK(midOf(c).seed==midOf(h).seed);
+    // The client's joystick and view reach the host: right for player 1 is -x, and the view is the sensor's.
+    c.in.pad.stickX=100;c.in.pad.aim=-20;c.in.pad.pitch=4;
+    CHECK(l.runUntil(2000,[&]{return midOf(h).players[1].x<-0.5f;}));
+    CHECK(std::fabs(midOf(h).players[1].yaw+20)<0.05f && std::fabs(midOf(h).players[1].pitch-4)<0.05f);
+    CHECK(l.runUntil(2000,[&]{return std::fabs(midOf(c).players[1].x-midOf(h).players[1].x)<0.01f && midOf(c).players[1].x<-0.5f;}));
+    c.in.pad.stickX=0;
+    // Complete real rounds: the client shoots the host's head each time; scores replicate and the rematch works.
+    for(int round=0;round<MidDiffGame::kWinningScore;++round) {
+        auto& g=midOf(h);
+        CHECK(l.runUntil(5000,[&]{return g.phase()==arcade::MatchPhase::Playing && g.players[1].cooldown==0;}));
+        l.run(300);
+        aimAtHead(c.in.pad,g,1);++c.in.pad.aCount;
+        CHECK(l.runUntil(3000,[&]{return g.score[1]==round+1;}));
+        CHECK(l.runUntil(3000,[&]{return midOf(c).score[1]==round+1;}));
+    }
+    CHECK(l.runUntil(1500,[&]{return midOf(c).phase()==arcade::MatchPhase::MatchEnd;}));
+    l.run(700);arcade::Writer a,b;midOf(h).encode(a);midOf(c).encode(b);
+    CHECK(a.n==b.n && memcmp(a.buf,b.buf,a.n)==0 && l.maxLen<=250);
+    const uint32_t seed=midOf(h).seed;
+    h.in.again=true;l.run(300);CHECK(midOf(h).seed==seed);
+    c.in.again=true;CHECK(l.runUntil(4000,[&]{return midOf(h).seed!=seed;}));
+    CHECK(l.runUntil(10000,[&]{return bothPlaying(l);}));l.run(300);
+    CHECK(midOf(h).score[1]==0 && midOf(c).score[1]==0 && midOf(c).seed==midOf(h).seed);
+    l.cut=true;l.run(1000);CHECK(h.s.status()==Status::LinkLost && c.s.status()==Status::LinkLost);
+    const float roundTime=midOf(h).roundTime;l.run(500);CHECK(midOf(h).roundTime==roundTime);
+    l.cut=false;CHECK(l.runUntil(2500,[&]{return bothPlaying(l);}));
+    c.s.leave();CHECK(l.runUntil(1000,[&]{return h.s.status()==Status::PeerLeft;}));
+    for(int variant=0;variant<2;++variant) {
+        Link isolated;arcade::GameInfo info=kMidDiffInfo;
+        if(variant)++info.protoVer;else info.wireId=kSamuraiDuelInfo.wireId;
+        auto& x=isolated.add(kClient,0,&info);auto& y=isolated.add(kHost,0,&kMidDiffInfo);
+        isolated.run(6000);CHECK(x.s.status()==Status::Searching && y.s.status()==Status::Searching);
+    }
+}
+
 int main() {
     testPairingClean();
     testPairingSimultaneousAnyOrder();
@@ -790,6 +843,8 @@ int main() {
     testBumperOverNetwork(0.2f,15,20);
     testSamuraiOverNetwork(0,0,0);
     testSamuraiOverNetwork(.2f,15,20);
+    testMidDiffOverNetwork(0,0,0);
+    testMidDiffOverNetwork(.2f,15,20);
     testGarbageDoesNotCrash();
     std::printf(failures ? "%d FAILURES\n" : "ALL PASSED\n", failures);
     return failures ? 1 : 0;

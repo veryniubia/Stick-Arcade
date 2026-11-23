@@ -15,7 +15,7 @@ namespace net {
 namespace {
 
 constexpr uint8_t kMagic = 0xD7;
-constexpr uint8_t kVersion = 3;  // session protocol; the game has its own protoVer
+constexpr uint8_t kVersion = 4;  // session protocol; the game has its own protoVer
 constexpr uint8_t kRoom = 0;     // reserved: devices only pair inside the same room (a future room code)
 
 enum : uint8_t { PT_HELLO = 1, PT_OFFER, PT_ACCEPT, PT_INPUT, PT_SNAP, PT_BYE };
@@ -189,6 +189,9 @@ void Session::sendInput(const LocalInput& in, uint32_t now) {
     w.u8(flags);
     w.u8(in.pad.bCount);
     w.u8(in.pad.aCount);
+    w.i16(arcade::q16(in.pad.pitch, 100.0f));
+    w.u8(static_cast<uint8_t>(in.pad.stickX));
+    w.u8(static_cast<uint8_t>(in.pad.stickY));
     tx_->send(peer_, w.buf, w.n);
 }
 
@@ -239,6 +242,9 @@ void Session::parseInput(const uint8_t* d, size_t len, uint32_t now) {
     const uint8_t flags = r.u8();
     const uint8_t bCount = r.u8();
     const uint8_t aCount = r.u8();
+    const int16_t pitch = r.i16();
+    const int8_t stickX = static_cast<int8_t>(r.u8());
+    const int8_t stickY = static_cast<int8_t>(r.u8());
     if (!r.ok) return;
 
     lastRxMs_ = now;
@@ -256,6 +262,9 @@ void Session::parseInput(const uint8_t* d, size_t len, uint32_t now) {
     remotePad_.b = (flags & kInB) != 0;
     remotePad_.bCount = bCount;
     remotePad_.aCount = aCount;
+    remotePad_.pitch = pitch / 100.0f;
+    remotePad_.stickX = stickX;
+    remotePad_.stickY = stickY;
     remoteAgain_ = (flags & kInAgain) != 0;
 }
 

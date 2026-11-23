@@ -82,6 +82,7 @@ struct GameInfo {
     IGame* (*create)(void* mem, Arena& arena);  // placement-new into mem
     uint8_t maxPlayers;      // announced in HELLO; the session itself only pairs two devices so far
     bool portrait;  // lobby remains landscape; gameplay uses a real 135x240 canvas
+    bool needsJoystick;  // requires the Joystick2 unit: shown apart in the launcher and fills PadInput's look/stick fields (false when omitted)
 };
 
 // One block per running game: [object][arena]. Internal RAM on the device, malloc on a PC.

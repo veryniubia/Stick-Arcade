@@ -21,6 +21,9 @@ public:
     }
     void drawFastHLine(int x,int y,int w,uint16_t col){fillRect(x,y,w,1,col);}
     void drawFastVLine(int x,int y,int h,uint16_t col){fillRect(x,y,1,h,col);}
+    void fillCircle(int cx,int cy,int r,uint16_t col){
+        for(int yy=-r;yy<=r;++yy)for(int xx=-r;xx<=r;++xx)if(xx*xx+yy*yy<=r*r)drawPixel(cx+xx,cy+yy,col);
+    }
     void drawRect(int x,int y,int w,int h,uint16_t col){
         drawFastHLine(x,y,w,col);drawFastHLine(x,y+h-1,w,col);
         drawFastVLine(x,y,h,col);drawFastVLine(x+w-1,y,h,col);
