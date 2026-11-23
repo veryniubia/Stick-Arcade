@@ -17,7 +17,6 @@ arcade::PortraitTilt g_portraitTilt;
 arcade::GyroLook g_look;
 bool g_lookOn = false;
 uint32_t g_lookUs = 0;
-uint8_t g_stickPresses = 0;
 float g_tilt = 0.0f;  // filtered device tilt in degrees
 float g_offset = 0.0f;
 bool g_primed = false;
@@ -46,13 +45,14 @@ void begin() {
 }
 
 void update() {
+    const bool bPressed = M5.BtnB.wasPressed();
     if (M5.BtnA.wasPressed()) ++g_aCount;
-    if (M5.BtnB.wasPressed()) ++g_bCount;
-    joystick::update();
-    if (joystick::pressCount() != g_stickPresses) {
-        g_stickPresses = joystick::pressCount();
-        g_look.recenter();
+    if (bPressed) {
+        ++g_bCount;
+        // Games that use the gyro view treat B as "this is straight ahead".
+        if (g_lookOn) g_look.recenter();
     }
+    joystick::update();
     if (!g_imuOk) return;
     M5.Imu.update();
     float ax = 0, ay = 0, az = 0;
@@ -117,7 +117,6 @@ void beginLook(float yawGainCenter, float yawGainEdge, float pitchGainCenter, fl
                float yawLimit, float pitchLimit) {
     g_look.reset();
     g_look.configure(yawGainCenter, yawGainEdge, pitchGainCenter, pitchGainEdge, yawLimit, pitchLimit);
-    g_stickPresses = joystick::pressCount();
     g_lookUs = micros();
     g_lookOn = true;
 }

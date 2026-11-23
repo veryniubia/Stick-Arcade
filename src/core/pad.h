@@ -17,6 +17,9 @@ struct PadInput {
     float pitch = 0.0f;
     int8_t stickX = 0;      // -100..100, positive = right of the player
     int8_t stickY = 0;      // -100..100, positive = forward (away from the player)
+    uint8_t jumpCount = 0;  // joystick presses so far (wraps); a changed count means "pressed since last step"
+    int8_t jumpX = 0;       // stick direction latched for that press (read just before the press, which nudges the stick)
+    int8_t jumpY = 0;
 };
 
 namespace pad {

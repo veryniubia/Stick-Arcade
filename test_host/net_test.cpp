@@ -616,8 +616,8 @@ static void testIgnoresForeignAndStalePackets() {
     CHECK(l.runUntil(8000, [&] { return h.s.status() == Status::Playing && c.s.status() == Status::Playing; }));
 
     // A forged input with the right session id but from another MAC must not move the host's opponent.
-    uint8_t pkt[19] = {0xD7, 4, static_cast<uint8_t>(h.s.sid_ & 0xFF), static_cast<uint8_t>(h.s.sid_ >> 8),
-                       0, 0, 0, 0, 0, 0, 0x10, 0x27, 1, 0, 0, 0, 0, 0, 0};  // aim = 100.00, A held
+    uint8_t pkt[22] = {0xD7, 4, static_cast<uint8_t>(h.s.sid_ & 0xFF), static_cast<uint8_t>(h.s.sid_ >> 8),
+                       0, 0, 0, 0, 0, 0, 0x10, 0x27, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};  // aim = 100.00, A held
     h.s.remotePad_.aim = 0.0f;
     h.s.onReceive(x.mac, pkt, sizeof(pkt), l.now);
     CHECK(h.s.remotePad_.aim == 0.0f);
@@ -765,45 +765,67 @@ static void testSamuraiOverNetwork(float loss, int latency, int jitter) {
 }
 
 static MidDiffGame& midOf(Endpoint& e) { return *static_cast<MidDiffGame*>(e.gi.game); }
+static void midPlace(MidDiffGame& g, int i, float x, float depth) {
+    g.players[i].x = x;
+    g.players[i].z = (g.face(i) > 0 ? -1.0f : 1.0f) * depth;
+}
 // Points the pad of `shooter` at the opponent's head.
 static void aimAtHead(PadInput& pad, const MidDiffGame& g, int shooter) {
-    const float f = MidDiffGame::facing(shooter);
+    const float f = g.face(shooter);
     const auto& me = g.players[shooter];
     const auto& foe = g.players[1 - shooter];
     const float dx = (foe.x - me.x) * f, dz = (foe.z - me.z) * f;
     pad.aim = std::atan2(dx, dz) * 57.29578f;
-    pad.pitch = std::atan2(MidDiffGame::bodyHeight(foe.crouch) - 0.2f - MidDiffGame::eyeHeight(me.crouch), std::hypot(dx, dz)) * 57.29578f;
+    pad.pitch = std::atan2(MidDiffGame::jumpHeight(foe) + MidDiffGame::kStandHeight - 0.2f -
+                           (MidDiffGame::kEye + MidDiffGame::jumpHeight(me)), std::hypot(dx, dz)) * 57.29578f;
 }
 static void testMidDiffOverNetwork(float loss, int latency, int jitter) {
     Link l;l.loss=loss;l.latency=latency;l.jitter=jitter;l.rng=77;
     auto& c=l.add(kClient,0,&kMidDiffInfo);auto& h=l.add(kHost,0,&kMidDiffInfo);
     CHECK(l.runUntil(30000,[&]{return bothPlaying(l);}));l.run(300);
-    CHECK(midOf(c).seed==midOf(h).seed);
-    // The client's joystick and view reach the host: right for player 1 is -x, and the view is the sensor's.
+    CHECK(midOf(c).seed==midOf(h).seed && midOf(c).swap_==midOf(h).swap_);
+    auto ready=[&]{
+        auto& g=midOf(h);
+        midPlace(g,0,0,9.0f);midPlace(g,1,0,9.0f);
+        for(auto& p:g.players){p.invuln=0;p.dead=0;p.hp=MidDiffGame::kMaxHp;p.cooldown=0;p.stamina=1;p.jumpT=0;}
+    };
+    ready();l.run(200);
+    // The client's joystick and view reach the host: right for the client is -x, and the view is the sensor's.
     c.in.pad.stickX=100;c.in.pad.aim=-20;c.in.pad.pitch=4;
     CHECK(l.runUntil(2000,[&]{return midOf(h).players[1].x<-0.5f;}));
     CHECK(std::fabs(midOf(h).players[1].yaw+20)<0.05f && std::fabs(midOf(h).players[1].pitch-4)<0.05f);
     CHECK(l.runUntil(2000,[&]{return std::fabs(midOf(c).players[1].x-midOf(h).players[1].x)<0.01f && midOf(c).players[1].x<-0.5f;}));
     c.in.pad.stickX=0;
-    // Complete real rounds: the client shoots the host's head each time; scores replicate and the rematch works.
-    for(int round=0;round<MidDiffGame::kWinningScore;++round) {
-        auto& g=midOf(h);
-        CHECK(l.runUntil(5000,[&]{return g.phase()==arcade::MatchPhase::Playing && g.players[1].cooldown==0;}));
-        l.run(300);
-        aimAtHead(c.in.pad,g,1);++c.in.pad.aCount;
-        CHECK(l.runUntil(3000,[&]{return g.score[1]==round+1;}));
-        CHECK(l.runUntil(3000,[&]{return midOf(c).score[1]==round+1;}));
+    // A press of the stick makes the client hop in the latched direction, even through packet loss.
+    ready();l.run(300);
+    c.in.pad.jumpX=0;c.in.pad.jumpY=100;++c.in.pad.jumpCount;
+    CHECK(l.runUntil(2000,[&]{return midOf(h).players[1].jumpT>0;}));
+    CHECK(l.runUntil(2000,[&]{return midOf(h).players[1].jumpT==0 && midOf(h).players[1].stamina<1.0f;}));
+    CHECK(std::fabs(std::fabs(midOf(h).players[1].z)-(9.0f-MidDiffGame::kJumpDistance))<0.15f);
+    // Real kills: the client shoots the host's head each time; the scores replicate and the match ends on the fifth.
+    for(int k=0;k<MidDiffGame::kWinningScore;++k) {
+        ready();l.run(400);
+        aimAtHead(c.in.pad,midOf(h),1);++c.in.pad.aCount;
+        CHECK(l.runUntil(3000,[&]{return midOf(h).score[1]==k+1;}));
+        CHECK(l.runUntil(3000,[&]{return midOf(c).score[1]==k+1;}));
+        CHECK(midOf(h).players[0].dead>0 || k==MidDiffGame::kWinningScore-1 || midOf(h).players[0].hp==0);
     }
     CHECK(l.runUntil(1500,[&]{return midOf(c).phase()==arcade::MatchPhase::MatchEnd;}));
     l.run(700);arcade::Writer a,b;midOf(h).encode(a);midOf(c).encode(b);
-    CHECK(a.n==b.n && memcmp(a.buf,b.buf,a.n)==0 && l.maxLen<=250);
+    // The gate keeps moving after the match (scenery), so the host is a little ahead of the client there: skip its 3 bytes.
+    CHECK(a.n==b.n && memcmp(a.buf,b.buf,14)==0 && memcmp(a.buf+17,b.buf+17,a.n-17)==0 && l.maxLen<=250);
+    CHECK(midOf(c).winner==1 && midOf(h).winner==1);
+    // Rematch: sides swap and the scores start again on both devices.
     const uint32_t seed=midOf(h).seed;
     h.in.again=true;l.run(300);CHECK(midOf(h).seed==seed);
     c.in.again=true;CHECK(l.runUntil(4000,[&]{return midOf(h).seed!=seed;}));
     CHECK(l.runUntil(10000,[&]{return bothPlaying(l);}));l.run(300);
     CHECK(midOf(h).score[1]==0 && midOf(c).score[1]==0 && midOf(c).seed==midOf(h).seed);
+    CHECK(midOf(h).swap_==1 && midOf(c).swap_==1 && midOf(h).players[0].z>0 && midOf(c).players[0].z>0 && midOf(c).players[1].z<0);
+    // The view helper follows the swap: the client is now team 0 and stands on the -z side.
+    CHECK(midOf(c).face(1)==1.0f);
     l.cut=true;l.run(1000);CHECK(h.s.status()==Status::LinkLost && c.s.status()==Status::LinkLost);
-    const float roundTime=midOf(h).roundTime;l.run(500);CHECK(midOf(h).roundTime==roundTime);
+    const float elapsed=midOf(h).elapsed;l.run(500);CHECK(midOf(h).elapsed==elapsed);
     l.cut=false;CHECK(l.runUntil(2500,[&]{return bothPlaying(l);}));
     c.s.leave();CHECK(l.runUntil(1000,[&]{return h.s.status()==Status::PeerLeft;}));
     for(int variant=0;variant<2;++variant) {

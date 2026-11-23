@@ -1,12 +1,11 @@
-// Host-side tests for MidDiff rules, its state codec, and the platform helpers it depends on (gyro look, stick map).
+// Host-side tests for the MidDiff rules and its state codec.
 #include "games/middiff/middiff.h"
-#include "core/gyro_look.h"
-#include "core/stick_map.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 void MidDiffGame::draw(int, const arcade::DrawCtx&) {}
 void MidDiffGame::sfx(uint32_t) {}
@@ -17,147 +16,275 @@ constexpr float tick = 1.f / 60;
 constexpr float rad = 57.2957795f;
 
 static void run(G& g, PadInput p[2], int frames) { for (int i = 0; i < frames; ++i) g.step(tick, p); }
-static G fresh(arcade::Mode m = arcade::Mode::Host) {
+static void ready(G& g) {  // no spawn protection, guns ready
+    for (auto& pl : g.players) { pl.invuln = 0; pl.cooldown = 0; }
+}
+static G fresh(arcade::Mode m = arcade::Mode::Host, uint32_t seed = 7) {
     G g;
-    g.begin(m, 7);
+    g.begin(m, seed);
     PadInput p[2] = {};
     g.prime(p);
+    ready(g);
     return g;
 }
-static bool same(const G& a, const G& b) {
-    arcade::Writer x, y;
-    a.encode(x);
-    b.encode(y);
-    return x.n == y.n && memcmp(x.buf, y.buf, x.n) == 0;
+static void place(G& g, int i, float x, float depth) {
+    g.players[i].x = x;
+    g.players[i].z = (g.face(i) > 0 ? -1.0f : 1.0f) * depth;
 }
+static float depthOf(const G& g, int i) { return std::fabs(g.players[i].z); }
+static void openGate(G& g) { g.gate.state = G::GateState::Open; g.gate.pos = 1; g.gate.timer = 100; }
+static void closeGate(G& g) { g.gate.state = G::GateState::Closed; g.gate.pos = 0; g.gate.timer = 100; }
 // Points shooter i's view at a world point.
 static void aimAt(PadInput& p, const G& g, int i, float tx, float ty, float tz) {
-    const float f = G::facing(i);
+    const float f = g.face(i);
     const auto& me = g.players[i];
     const float dx = (tx - me.x) * f, dz = (tz - me.z) * f;
     p.aim = std::atan2(dx, dz) * rad;
-    p.pitch = std::atan2(ty - G::eyeHeight(me.crouch), std::hypot(dx, dz)) * rad;
+    p.pitch = std::atan2(ty - (G::kEye + G::jumpHeight(me)), std::hypot(dx, dz)) * rad;
+}
+static void aimHead(PadInput& p, const G& g, int i) {
+    const auto& foe = g.players[1 - i];
+    aimAt(p, g, i, foe.x, G::jumpHeight(foe) + G::kStandHeight - 0.2f, foe.z);
 }
 static void fire(PadInput& p) { ++p.aCount; }
-static void waitReady(G& g, PadInput p[2]) { run(g, p, int(G::kRoundStartCooldown / tick) + 2); }
+static void jump(PadInput& p, int jx, int jy) { p.jumpX = static_cast<int8_t>(jx); p.jumpY = static_cast<int8_t>(jy); ++p.jumpCount; }
+// Hands off the controls without touching the press counters (a counter that goes back would look like a press).
+static void quiet(PadInput& p) { p.aim = p.pitch = 0; p.stickX = p.stickY = 0; }
+// Both players face each other along x = 0, through the centre arch, ready to shoot.
+static G duel() {
+    G g = fresh();
+    place(g, 0, 0, 8.5f);
+    place(g, 1, 0, 8.5f);
+    return g;
+}
+static bool sees(const G& g, int i, float y) {
+    PadInput p;
+    G copy = g;
+    const auto& foe = g.players[1 - i];
+    aimAt(p, g, i, foe.x, y, foe.z);
+    copy.players[i].yaw = p.aim;
+    copy.players[i].pitch = p.pitch;
+    return copy.trace(i).hit;
+}
+
+static void world() {
+    // Every box is well formed; the covers are inside the arena and clear of the mid wall.
+    for (int i = 0; i < G::kBoxCount; ++i) {
+        const auto& b = G::boxes[i];
+        CHECK(b.x0 < b.x1 && b.y0 <= b.y1 && b.z0 < b.z1);
+        CHECK(b.x0 >= -G::kArenaHalfWidth && b.x1 <= G::kArenaHalfWidth && b.z0 >= -G::kWallZ && b.z1 <= G::kWallZ);
+    }
+    for (int i = G::kWalkFirst; i < G::kWalkEnd; ++i) {
+        const auto& b = G::boxes[i];
+        CHECK(std::fabs(b.z0) >= G::kNearZ - 1e-4f && std::fabs(b.z1) <= G::kFarZ);
+        CHECK(!(b.z0 < 0 && b.z1 > 0));
+    }
+    // The covers of the two halves are laid out differently but offer the same amount of cover.
+    float width[2][2] = {};  // [team][high, low]
+    for (int i = G::kWalkFirst; i < G::kWalkEnd; ++i) {
+        const auto& b = G::boxes[i];
+        if (b.kind != G::Kind::HighCover && b.kind != G::Kind::LowCover) continue;
+        width[b.z0 < 0 ? 0 : 1][b.kind == G::Kind::HighCover ? 0 : 1] += b.x1 - b.x0;
+    }
+    CHECK(std::fabs(width[0][0] - 6.0f) < 0.7f && std::fabs(width[1][0] - 5.4f) < 0.7f);
+    CHECK(std::fabs(width[0][1] - 5.0f) < 1.3f && std::fabs(width[1][1] - 6.2f) < 1.3f);
+    CHECK(G::boxes[11].x0 != -G::boxes[15].x1 || G::boxes[12].x1 != -G::boxes[16].x0);
+    // Respawn and start positions are free.
+    CHECK(!G::blockedAt(0, -G::kStartDepth, G::kCollideRadius) && !G::blockedAt(0, G::kStartDepth, G::kCollideRadius));
+}
 
 static void movement() {
-    G g = fresh();
+    G g = duel();
     PadInput p[2] = {};
     // Forward for both players is towards the middle and stops at the line nobody may cross.
     p[0].stickY = 100; p[1].stickY = 100;
     run(g, p, 300);
-    CHECK(std::fabs(g.players[0].z + G::kNearZ) < 1e-3f);
-    CHECK(std::fabs(g.players[1].z - G::kNearZ) < 1e-3f);
+    CHECK(std::fabs(depthOf(g, 0) - G::kNearZ) < 1e-3f && std::fabs(depthOf(g, 1) - G::kNearZ) < 1e-3f);
     CHECK(g.players[1].z - g.players[0].z >= 2 * G::kNearZ - 1e-3f);
-    // Backwards stops at the back of the zone.
+    // Walking speed.
+    g = duel();
+    p[0].stickY = 100; p[1].stickY = 0;
+    run(g, p, 30);
+    CHECK(std::fabs((8.5f - depthOf(g, 0)) - G::kWalkSpeed * 0.5f) < 0.03f);
+    // Backwards stops at the back of the zone, or at the low cover standing in the way.
+    g = duel();
     p[0].stickY = p[1].stickY = -100;
     run(g, p, 400);
-    CHECK(std::fabs(g.players[0].z + G::kFarZ) < 1e-3f && std::fabs(g.players[1].z - G::kFarZ) < 1e-3f);
-    // Right is the player's right: +x for player 0, -x for player 1.
+    CHECK(std::fabs(depthOf(g, 1) - G::kFarZ) < 1e-3f);                                  // gap between the CT low walls
+    CHECK(std::fabs(depthOf(g, 0) - (11.1f - G::kCollideRadius)) < 0.08f);               // T low wall in the way
+    // Right is the player's right: +x for team 0, -x for team 1.
+    g = duel();
     p[0].stickY = p[1].stickY = 0;
     p[0].stickX = p[1].stickX = 100;
     run(g, p, 30);
     CHECK(g.players[0].x > 1.0f && g.players[1].x < -1.0f);
     run(g, p, 300);
     CHECK(std::fabs(g.players[0].x - G::kHalfWidth) < 1e-3f && std::fabs(g.players[1].x + G::kHalfWidth) < 1e-3f);
+    // Covers are solid: a player behind a high wall cannot walk through it, and slides along it.
+    g = duel();
+    place(g, 0, -3.0f, 9.0f);
+    p[0] = PadInput(); p[0].stickY = 100;
+    run(g, p, 120);
+    CHECK(std::fabs(depthOf(g, 0) - (6.8f + G::kCollideRadius)) < 0.08f && std::fabs(g.players[0].x + 3.0f) < 1e-3f);
+    p[0].stickX = 100;
+    run(g, p, 120);
+    CHECK(g.players[0].x > -1.8f + G::kCollideRadius - 1e-3f && depthOf(g, 0) < 6.9f);  // went round the end into the gap
+    // ... and through the gap the whole way to the line.
+    g = duel();
+    place(g, 0, 0.0f, 9.0f);
+    p[0] = PadInput(); p[0].stickY = 100;
+    run(g, p, 120);
+    CHECK(std::fabs(depthOf(g, 0) - G::kNearZ) < 1e-3f);
     // The view direction never changes where the stick takes the player.
-    G a = fresh(), b = fresh();
+    G a = duel(), b = duel();
     PadInput pa[2] = {}, pb[2] = {};
     pa[0].stickX = pb[0].stickX = 60; pa[0].stickY = pb[0].stickY = 80;
     pb[0].aim = 85; pb[0].pitch = -20;
     run(a, pa, 40); run(b, pb, 40);
     CHECK(a.players[0].x == b.players[0].x && a.players[0].z == b.players[0].z);
     // Diagonals are not faster than straight lines.
-    G c = fresh(), d = fresh();
+    G c = duel(), d = duel();
     PadInput pc[2] = {}, pd[2] = {};
-    pc[0].stickX = 100; pc[0].stickY = 0;
+    pc[0].stickX = 100;
     pd[0].stickX = 100; pd[0].stickY = 100;
     run(c, pc, 20); run(d, pd, 20);
-    CHECK(std::hypot(d.players[0].x, d.players[0].z + G::kSpawnZ) <= std::hypot(c.players[0].x, c.players[0].z + G::kSpawnZ) + 1e-3f);
+    CHECK(std::hypot(d.players[0].x, d.players[0].z + 8.5f) <= std::hypot(c.players[0].x, c.players[0].z + 8.5f) + 1e-3f);
     // Garbage input is harmless.
     PadInput bad[2] = {};
     bad[0].aim = std::numeric_limits<float>::quiet_NaN();
     bad[0].pitch = std::numeric_limits<float>::infinity();
     bad[0].stickX = -128; bad[0].stickY = 127;
+    bad[0].jumpX = -128; bad[0].jumpY = 127; ++bad[0].jumpCount;
     run(c, bad, 10);
     CHECK(std::isfinite(c.players[0].x) && c.players[0].yaw == 0 && c.players[0].pitch == 0);
+    // View limits.
+    G v = duel();
+    PadInput pv[2] = {};
+    pv[0].aim = 500; pv[0].pitch = -500;
+    v.step(tick, pv);
+    CHECK(v.players[0].yaw == G::kYawLimit && v.players[0].pitch == -G::kPitchLimit);
 }
 
-static void viewLimits() {
-    G g = fresh();
+static void jumping() {
+    G g = duel();
     PadInput p[2] = {};
-    p[0].aim = 500; p[0].pitch = -500;
+    place(g, 0, 0, 9.0f);
+    place(g, 1, 0, 9.0f);
+    jump(p[0], 0, 100);
     g.step(tick, p);
-    CHECK(g.players[0].yaw == G::kYawLimit && g.players[0].pitch == -G::kPitchLimit);
-}
-
-static void staminaAndCrouch() {
-    G g = fresh();
-    PadInput p[2] = {};
-    p[0].b = true;
-    run(g, p, 12);
-    CHECK(g.players[0].crouch > 0.9f && g.players[0].ducking);
-    const float walk = G::kCrouchSpeed;
-    CHECK(walk < G::kWalkSpeed);
-    // Crouching drains stamina until the player is forced up.
-    run(g, p, int(1.0f / G::kStaminaDrain / tick) + 10);
-    CHECK(g.players[0].winded && !g.players[0].ducking && g.players[0].stamina == 0);
-    run(g, p, 60);
-    CHECK(g.players[0].crouch < 0.05f);
-    // Still holding B: no way back down, even after stamina returns.
-    run(g, p, 600);
-    CHECK(g.players[0].stamina > G::kWindedRecover && g.players[0].winded && !g.players[0].ducking);
-    p[0].b = false;
-    run(g, p, 2);
-    CHECK(!g.players[0].winded);
-    p[0].b = true;
-    run(g, p, 12);
-    CHECK(g.players[0].ducking);
-    // Regeneration waits a moment after the last crouch.
-    p[0].b = false;
-    const float s0 = g.players[0].stamina;
-    run(g, p, 20);
-    CHECK(g.players[0].stamina == s0);
-    run(g, p, 120);
-    CHECK(g.players[0].stamina > s0);
-    run(g, p, 60 * 5);
-    CHECK(g.players[0].stamina == 1.0f);
-    // Crouched movement is slower.
-    G m = fresh();
-    PadInput pm[2] = {};
-    pm[0].b = true; pm[0].stickY = 100;
-    run(m, pm, 30);
-    const float crouched = m.players[0].z + G::kSpawnZ;
-    G n = fresh();
-    PadInput pn[2] = {};
-    pn[0].stickY = 100;
-    run(n, pn, 30);
-    CHECK(crouched < n.players[0].z + G::kSpawnZ);
+    CHECK(g.players[0].jumpT > 0 && g.players[0].stamina < 0.72f && g.players[0].stamina > 0.6f);
+    float peak = 0;
+    for (int i = 0; i < 40; ++i) { g.step(tick, p); peak = std::max(peak, G::jumpHeight(g.players[0])); }
+    CHECK(g.players[0].jumpT == 0);
+    CHECK(std::fabs(peak - G::kJumpHeight) < 0.03f);
+    CHECK(std::fabs((9.0f - depthOf(g, 0)) - G::kJumpDistance) < 0.1f);  // towards the middle
+    CHECK(g.players[1].z == 9.0f && g.players[1].x == 0);
+    // Direction is relative to the player: right is +x for team 0 and -x for team 1, back is away from the middle.
+    G s = duel();
+    PadInput ps[2] = {};
+    jump(ps[0], 100, 0); jump(ps[1], 100, 0);
+    run(s, ps, 40);
+    CHECK(std::fabs(s.players[0].x - G::kJumpDistance) < 0.1f && std::fabs(s.players[1].x + G::kJumpDistance) < 0.1f);
+    G back = duel();
+    place(back, 0, -4.5f, 8.5f);
+    PadInput pb[2] = {};
+    jump(pb[0], 0, -100);
+    run(back, pb, 40);
+    CHECK(std::fabs((depthOf(back, 0) - 8.5f) - G::kJumpDistance) < 0.1f);
+    // Diagonal hops cover the same distance.
+    G diag = duel();
+    place(diag, 0, -4.0f, 9.5f);
+    PadInput pd[2] = {};
+    jump(pd[0], 90, 90);
+    run(diag, pd, 40);
+    CHECK(std::fabs(std::hypot(diag.players[0].x + 4.0f, depthOf(diag, 0) - 9.5f) - G::kJumpDistance) < 0.1f);
+    // No stick: a hop on the spot, which still costs stamina.
+    G spot = duel();
+    PadInput pp[2] = {};
+    jump(pp[0], 5, -8);
+    spot.step(tick, pp);
+    CHECK(spot.players[0].jumpT > 0 && spot.players[0].stamina < 0.72f);
+    run(spot, pp, 40);
+    CHECK(spot.players[0].x == 0 && std::fabs(depthOf(spot, 0) - 8.5f) < 1e-4f);
+    // In the air the direction is fixed and the stick does nothing; another press is ignored.
+    G air = duel();
+    PadInput pa[2] = {};
+    jump(pa[0], 0, 100);
+    air.step(tick, pa);
+    pa[0].stickX = 100; pa[0].stickY = -100;
+    jump(pa[0], 100, 0);
+    const float stamina = air.players[0].stamina;
+    run(air, pa, 10);
+    CHECK(air.players[0].x == 0 && air.players[0].stamina <= stamina + 0.06f);
+    // A hop cannot cross a cover: it stops at the wall.
+    G wall = duel();
+    place(wall, 0, -3.0f, 7.6f);
+    PadInput pw[2] = {};
+    jump(pw[0], 0, 100);
+    run(wall, pw, 40);
+    CHECK(std::fabs(depthOf(wall, 0) - (6.8f + G::kCollideRadius)) < 0.08f);
+    // Hops cost a third of the stamina; it refills a third per second, so they cannot be chained for ever.
+    G chain = duel();
+    PadInput pc[2] = {};
+    int hops = 0;
+    for (int k = 0; k < 20; ++k) {
+        const bool before = chain.players[0].jumpT > 0;
+        (void)before;
+        jump(pc[0], 100, 0);
+        chain.step(tick, pc);
+        if (chain.players[0].jumpT > 0) ++hops;
+        run(chain, pc, 34);
+        pc[0].jumpX = (k % 2) ? 100 : -100;
+    }
+    CHECK(hops >= 5 && hops < 20);
+    // Without stamina the press does nothing; after a second there is enough for one more.
+    G dry = duel();
+    PadInput py[2] = {};
+    dry.players[0].stamina = 0.2f;
+    jump(py[0], 0, 100);
+    dry.step(tick, py);
+    CHECK(dry.players[0].jumpT == 0);
+    run(dry, py, 60);
+    jump(py[0], 0, 100);
+    dry.step(tick, py);
+    CHECK(dry.players[0].jumpT > 0);
+    // Hitting a jumper: the head rides 0.7 m higher, so a shot at the standing head height hits the body.
+    G hit = duel();
+    PadInput ph[2] = {};
+    hit.players[1].jumpT = G::kJumpTime / 2;
+    aimAt(ph[0], hit, 0, 0, 1.6f, hit.players[1].z);
+    G probe = hit;
+    probe.players[0].yaw = ph[0].aim; probe.players[0].pitch = ph[0].pitch;
+    const auto t = probe.trace(0);
+    CHECK(t.hit && !t.head);
+    // The shooter's own eye rises when jumping.
+    G eye = duel();
+    eye.players[0].jumpT = G::kJumpTime / 2;
+    eye.players[0].pitch = 0;
+    const auto te = eye.trace(0);
+    CHECK(std::fabs(te.y - (G::kEye + G::kJumpHeight)) < 1e-3f);
 }
 
 static void shooting() {
-    // A standing opponent's head above their cover is hit, and a head shot kills.
-    G g = fresh();
+    // A head shot kills and scores.
+    G g = duel();
     PadInput p[2] = {};
-    waitReady(g, p);
-    aimAt(p[0], g, 0, 0, 1.6f, g.players[1].z);
+    aimHead(p[0], g, 0);
     fire(p[0]);
     uint32_t ev = g.step(tick, p);
     CHECK(ev & G::ShotP0);
-    CHECK((ev & G::HurtP1) && (ev & G::Headshot));
-    CHECK(g.players[1].hp == 0 && g.score[0] == 1 && g.roundWinner == 0);
-    CHECK(g.phase() == arcade::MatchPhase::RoundEnd && (ev & G::Round));
-    // A body shot costs half the health.
-    g = fresh();
-    p[0] = p[1] = PadInput();
-    waitReady(g, p);
-    aimAt(p[0], g, 0, 0, 1.2f, g.players[1].z);
+    CHECK((ev & G::HurtP1) && (ev & G::Headshot) && (ev & G::DieP1) && !(ev & G::DieP0));
+    CHECK(g.players[1].hp == 0 && g.score[0] == 1 && g.score[1] == 0);
+    CHECK(g.phase() == arcade::MatchPhase::Playing);  // no rounds: the match goes on
+    // A body shot costs half the health and a second one kills.
+    g = duel();
+    p[0] = PadInput();
+    aimAt(p[0], g, 0, 0, 1.0f, g.players[1].z);
     fire(p[0]);
     ev = g.step(tick, p);
-    CHECK((ev & G::HurtP1) && !(ev & G::Headshot) && g.players[1].hp == G::kMaxHp - G::kBodyDamage);
+    CHECK((ev & G::HurtP1) && !(ev & G::Headshot) && !(ev & G::DieP1) && g.players[1].hp == G::kMaxHp - G::kBodyDamage);
     CHECK(g.players[0].marker > 0 && !g.players[0].markerHead && g.players[1].hurt > 0);
-    // The shot has a cooldown. A press that comes too early is lost; one just before the gun is ready is buffered.
+    // The shot has a cooldown: an early press is lost, one just before the gun is ready is buffered.
     PadInput idle[2] = {};
     idle[0] = p[0];
     run(g, idle, 30);
@@ -168,189 +295,373 @@ static void shooting() {
     run(g, idle, 22);
     CHECK(g.players[0].cooldown < 0.1f && g.players[0].cooldown > 0);
     fire(idle[0]);
-    bool fired = false;
-    for (int i = 0; i < 10 && !fired; ++i) fired = (g.step(tick, idle) & G::ShotP0) != 0;
-    CHECK(fired);
-    // Player 1 shoots the other way.
-    g = fresh();
+    bool fired = false, killed = false;
+    for (int i = 0; i < 10 && !fired; ++i) {
+        const uint32_t e = g.step(tick, idle);
+        fired = (e & G::ShotP0) != 0;
+        killed = (e & G::DieP1) != 0;
+    }
+    CHECK(fired && killed);
+    // Team 1 shoots the other way.
+    g = duel();
     p[0] = p[1] = PadInput();
-    waitReady(g, p);
-    aimAt(p[1], g, 1, 0, 1.6f, g.players[0].z);
+    aimHead(p[1], g, 1);
     fire(p[1]);
     ev = g.step(tick, p);
-    CHECK((ev & G::ShotP1) && (ev & G::HurtP0) && g.score[1] == 1);
-}
-
-static void coverAndPeeking() {
-    G g = fresh();
-    PadInput p[2] = {};
-    waitReady(g, p);
-    // The cover hides a standing opponent's torso below the cover line but not their head.
-    aimAt(p[0], g, 0, 0, 0.85f, g.players[1].z);
-    g.players[0].yaw = p[0].aim; g.players[0].pitch = p[0].pitch;
-    CHECK(g.trace(0).covered && !g.trace(0).hit);
-    // A crouched opponent directly behind the cover cannot be hit anywhere.
-    g.players[1].crouch = 1;
-    bool any = false;
-    for (float y = 0.1f; y < 1.2f; y += 0.05f) {
-        aimAt(p[0], g, 0, 0, y, g.players[1].z);
-        g.players[0].yaw = p[0].aim; g.players[0].pitch = p[0].pitch;
-        any |= g.trace(0).hit;
-    }
-    CHECK(!any);
-    // Peeking out to the side makes the same crouched opponent a target.
-    g.players[1].x = G::kCoverHalfWidth + 0.8f;
-    aimAt(p[0], g, 0, g.players[1].x, 0.5f, g.players[1].z);
-    g.players[0].yaw = p[0].aim; g.players[0].pitch = p[0].pitch;
-    CHECK(g.trace(0).hit && !g.trace(0).head);
-    // The shooter's own cover stops shots aimed into it.
-    g.players[0].crouch = 1;
-    g.players[0].yaw = 0; g.players[0].pitch = 0;
-    CHECK(g.trace(0).covered);
-    // Shots into the floor end on it (away from the cover).
-    g.players[0].crouch = 0; g.players[0].pitch = -30; g.players[0].x = 3;
-    const auto t = g.trace(0);
-    CHECK(!t.hit && !t.covered && std::fabs(t.y) < 1e-3f);
-    // Aiming above the opponent misses and ends at maximum range or the arena.
-    g.players[0].pitch = 10; g.players[0].yaw = 0; g.players[0].x = 0;
-    CHECK(!g.trace(0).hit);
-}
-
-static void doubleKnockout() {
-    G g = fresh();
-    PadInput p[2] = {};
-    waitReady(g, p);
-    aimAt(p[0], g, 0, 0, 1.6f, g.players[1].z);
-    aimAt(p[1], g, 1, 0, 1.6f, g.players[0].z);
+    CHECK((ev & G::ShotP1) && (ev & G::DieP0) && g.score[1] == 1);
+    // Both shoot in the same step: both die and both score, and the match goes on.
+    g = duel();
+    p[0] = p[1] = PadInput();
+    aimHead(p[0], g, 0);
+    aimHead(p[1], g, 1);
     fire(p[0]); fire(p[1]);
-    const uint32_t ev = g.step(tick, p);
-    CHECK((ev & G::HurtP0) && (ev & G::HurtP1));
-    CHECK(g.roundWinner == -1 && g.score[0] == 0 && g.score[1] == 0);
-    CHECK(g.phase() == arcade::MatchPhase::RoundEnd);
-    // The next round starts clean.
-    run(g, p, int(G::kRoundPause / tick) + 2);
+    ev = g.step(tick, p);
+    CHECK((ev & G::DieP0) && (ev & G::DieP1) && g.score[0] == 1 && g.score[1] == 1);
     CHECK(g.phase() == arcade::MatchPhase::Playing);
-    CHECK(g.players[0].hp == G::kMaxHp && g.players[1].hp == G::kMaxHp);
-    CHECK(g.players[0].x == 0 && g.players[0].z == -G::kSpawnZ && g.players[1].z == G::kSpawnZ);
+    // A press during the opening cooldown fires as soon as it ends.
+    G k = fresh();
+    PadInput r[2] = {};
+    k.players[0].cooldown = G::kSpawnCooldown;
+    run(k, r, 14);
+    fire(r[0]);
+    fired = false;
+    for (int i = 0; i < 20 && !fired; ++i) fired = (k.step(tick, r) & G::ShotP0) != 0;
+    CHECK(fired);
+}
+
+static void coverAndSight() {
+    // High cover: the head is over it, the chest is not.
+    G g = duel();
+    openGate(g);
+    place(g, 0, -3.0f, 8.5f);
+    place(g, 1, -3.0f, 8.5f);
+    CHECK(sees(g, 0, 1.6f) && sees(g, 1, 1.6f));
+    CHECK(!sees(g, 0, 1.0f) && !sees(g, 1, 1.0f));
+    PadInput p;
+    G probe = g;
+    aimAt(p, g, 0, -3.0f, 1.0f, 8.5f);
+    probe.players[0].yaw = p.aim; probe.players[0].pitch = p.pitch;
+    CHECK(probe.trace(0).covered);
+    // Low cover: chest and head over it, legs and hips behind it.
+    G low = duel();
+    place(low, 0, 0.5f, 8.5f);
+    place(low, 1, 0.5f, 12.5f);
+    CHECK(sees(low, 0, 1.3f) && sees(low, 0, 1.6f));
+    CHECK(!sees(low, 0, 1.0f) && !sees(low, 0, 0.5f));
+    // The far team's low cover is about 24 m away from the other team's.
+    CHECK(std::fabs((low.players[1].z - low.players[0].z) - 21.0f) < 1e-3f);
+    place(low, 0, 0.5f, 10.7f);
+    place(low, 1, 0.5f, 14.3f);
+    CHECK(low.players[1].z - low.players[0].z >= 24.9f);
+    // The mid wall: a pier stops everything, the gate stops everything while closed and lets shots through when lifted.
+    G wall = duel();
+    place(wall, 0, -1.5f, 8.5f);
+    place(wall, 1, -1.5f, 8.5f);
+    openGate(wall);
+    CHECK(!sees(wall, 0, 1.6f) && !sees(wall, 0, 2.3f));
+    place(wall, 0, -3.0f, 8.5f);
+    place(wall, 1, -3.0f, 8.5f);
+    closeGate(wall);
+    CHECK(!sees(wall, 0, 1.6f));
+    openGate(wall);
+    CHECK(sees(wall, 0, 1.6f));
+    wall.gate.state = G::GateState::Opening; wall.gate.pos = 0.3f;  // lifted a little: still shut at head height
+    CHECK(!sees(wall, 0, 1.6f));
+    // The centre arch is always open.
+    place(wall, 0, 0.0f, 8.5f);
+    place(wall, 1, 0.0f, 8.5f);
+    closeGate(wall);
+    CHECK(sees(wall, 0, 1.6f));
+    // Barrels: the stack of two blocks the head, the single barrels leave it free.
+    place(wall, 0, 2.7f, 8.5f);
+    place(wall, 1, 2.7f, 8.5f);
+    CHECK(!sees(wall, 0, 1.6f));
+    place(wall, 0, 3.5f, 8.5f);
+    place(wall, 1, 3.5f, 8.5f);
+    CHECK(sees(wall, 0, 1.6f) && !sees(wall, 0, 0.8f));
+    // Nobody is hurt through a cover and nothing registers a hit on a miss.
+    G miss = duel();
+    place(miss, 0, -1.5f, 8.5f);
+    place(miss, 1, -1.5f, 8.5f);
+    PadInput pm[2] = {};
+    aimHead(pm[0], miss, 0);
+    fire(pm[0]);
+    const uint32_t ev = miss.step(tick, pm);
+    CHECK((ev & G::ShotP0) && !(ev & G::HurtP1) && miss.players[1].hp == G::kMaxHp && miss.players[0].marker == 0);
+}
+
+static void gate() {
+    G g = fresh();
+    PadInput p[2] = {};
+    struct Wait { G::GateState state; float seconds; };
+    std::vector<Wait> waits;
+    G::GateState last = g.gate.state;
+    float stateStart = 0, t = 0;
+    int warnings = 0, moves = 0;
+    float warnBefore = -1;
+    for (int i = 0; i < 60 * 240; ++i) {
+        const uint32_t ev = g.step(tick, p);
+        t += tick;
+        if (ev & G::GateMove) { ++warnings; warnBefore = t; }
+        if (g.gate.state != last) {
+            waits.push_back({last, t - stateStart});
+            if (last == G::GateState::Closed || last == G::GateState::Open) {
+                ++moves;
+                CHECK(std::fabs((t - warnBefore) - G::kGateWarn) < 0.05f);  // rattles just before it moves
+            }
+            last = g.gate.state;
+            stateStart = t;
+        }
+        CHECK(g.gate.pos >= 0 && g.gate.pos <= 1);
+    }
+    float closedMin = 99, closedMax = 0, openMin = 99, openMax = 0;
+    int closedN = 0, openN = 0;
+    for (const auto& w : waits) {
+        if (w.state == G::GateState::Closed) { closedMin = std::min(closedMin, w.seconds); closedMax = std::max(closedMax, w.seconds); ++closedN; }
+        if (w.state == G::GateState::Open) { openMin = std::min(openMin, w.seconds); openMax = std::max(openMax, w.seconds); ++openN; }
+        if (w.state == G::GateState::Opening || w.state == G::GateState::Closing) CHECK(std::fabs(w.seconds - G::kGateMoveTime) < 0.05f);
+    }
+    CHECK(closedN >= 10 && openN >= 10);
+    CHECK(closedMin >= G::kGateClosedMin - 0.05f && closedMax <= G::kGateClosedMax + 0.05f);
+    CHECK(openMin >= G::kGateOpenMin - 0.05f && openMax <= G::kGateOpenMax + 0.05f);
+    CHECK(closedMax - closedMin > 1.0f && openMax - openMin > 1.0f);  // irregular, not a fixed rhythm
+    CHECK(warnings >= moves - 1 && warnings <= moves + 1);
+    // The same seed gives the same gate; another seed another.
+    G a = fresh(arcade::Mode::Host, 11), b = fresh(arcade::Mode::Host, 11), c = fresh(arcade::Mode::Host, 12);
+    run(a, p, 1000); run(b, p, 1000); run(c, p, 1000);
+    CHECK(a.gate.pos == b.gate.pos && a.gate.timer == b.gate.timer);
+    CHECK(a.gate.timer != c.gate.timer || a.gate.pos != c.gate.pos);
+    // The gate keeps working after the match is over (it is scenery).
+    G e = duel();
+    e.phase_ = arcade::MatchPhase::MatchEnd;
+    const float before = e.gate.timer;
+    run(e, p, 30);
+    CHECK(e.gate.timer < before);
+}
+
+static void lifeAndDeath() {
+    G g = duel();
+    PadInput p[2] = {};
+    aimHead(p[0], g, 0);
+    fire(p[0]);
+    g.step(tick, p);
+    CHECK(g.players[1].dead > G::kRespawnTime - 0.02f && g.players[1].hp == 0);
+    quiet(p[0]);
+    // The dead cannot move, shoot or be shot, and stay where they fell.
+    const float x = g.players[1].x, z = g.players[1].z;
+    p[1].stickX = 100; p[1].stickY = 100; fire(p[1]); jump(p[1], 100, 100);
+    uint32_t ev = 0;
+    for (int i = 0; i < 60; ++i) ev |= g.step(tick, p);
+    CHECK(!(ev & G::ShotP1) && g.players[1].x == x && g.players[1].z == z && g.players[1].dead > 0);
+    G probe = g;
+    aimAt(p[0], g, 0, x, 1.6f, z);
+    probe.players[0].yaw = p[0].aim; probe.players[0].pitch = p[0].pitch;
+    CHECK(!probe.trace(0).hit);
+    // After 1.5 s they are back, at full health, protected, somewhere in their own half.
+    for (int i = 0; i < 40 && g.players[1].dead > 0; ++i) g.step(tick, p);
+    CHECK(g.players[1].dead == 0 && g.players[1].hp == G::kMaxHp);
+    CHECK(g.players[1].invuln > G::kSpawnInvuln - 0.05f && g.players[1].invuln <= G::kSpawnInvuln);
+    CHECK(g.players[1].z > 0 && depthOf(g, 1) >= G::kNearZ && depthOf(g, 1) <= G::kFarZ && std::fabs(g.players[1].x) <= G::kHalfWidth);
+    CHECK(!G::blockedAt(g.players[1].x, g.players[1].z, G::kCollideRadius));
+    CHECK(g.players[1].stamina == 1.0f && g.players[1].jumpT == 0);
+    // Protection: shots are absorbed (and show as such), no health is lost and nobody scores.
+    place(g, 1, 0, 8.5f);
+    g.players[0].cooldown = 0;
+    quiet(p[1]);
+    aimHead(p[0], g, 0);
+    fire(p[0]);
+    ev = g.step(tick, p);
+    CHECK((ev & G::ShotP0) && !(ev & G::HurtP1) && g.players[1].hp == G::kMaxHp && g.players[0].markerShield);
+    CHECK(g.score[0] == 1);
+    // It ends after 1.5 s...
+    G time = duel();
+    PadInput pt[2] = {};
+    time.players[1].invuln = G::kSpawnInvuln;
+    run(time, pt, 85);
+    CHECK(time.players[1].invuln > 0);
+    run(time, pt, 8);
+    CHECK(time.players[1].invuln == 0);
+    // ... or when the protected player fires.
+    G fireEnd = duel();
+    PadInput pf[2] = {};
+    fireEnd.players[1].invuln = G::kSpawnInvuln;
+    fire(pf[1]);
+    const uint32_t evf = fireEnd.step(tick, pf);
+    CHECK((evf & G::ShotP1) && fireEnd.players[1].invuln == 0);
+    // Respawns are spread over the half and never in a cover.
+    G spread = duel();
+    PadInput ps[2] = {};
+    std::vector<std::pair<float, float>> spots;
+    for (int k = 0; k < 24; ++k) {
+        ready(spread);
+        spread.score[0] = 0;  // keep the match going
+        place(spread, 0, 0, 8.5f);
+        place(spread, 1, 0, 8.5f);
+        spread.players[1].dead = 0;
+        spread.players[1].hp = G::kMaxHp;
+        aimHead(ps[0], spread, 0);
+        fire(ps[0]);
+        spread.step(tick, ps);
+        quiet(ps[0]);
+        for (int i = 0; i < 100 && spread.players[1].dead > 0; ++i) spread.step(tick, ps);
+        CHECK(spread.players[1].dead == 0);
+        spots.push_back(std::make_pair(spread.players[1].x, spread.players[1].z));
+        CHECK(!G::blockedAt(spots.back().first, spots.back().second, G::kCollideRadius));
+        CHECK(spots.back().second >= G::kNearZ && spots.back().second <= G::kFarZ);
+    }
+    float minX = 9, maxX = -9, minZ = 99, maxZ = 0;
+    for (const auto& s : spots) {
+        minX = std::min(minX, s.first); maxX = std::max(maxX, s.first);
+        minZ = std::min(minZ, s.second); maxZ = std::max(maxZ, s.second);
+    }
+    CHECK(maxX - minX > 4.0f && maxZ - minZ > 3.0f);
 }
 
 static void matchFlow() {
-    G g = fresh();
+    // Scoring: first to 5, then the match is over and stays over.
+    G g = duel();
     PadInput p[2] = {};
-    for (int round = 0; round < G::kWinningScore; ++round) {
-        waitReady(g, p);
-        aimAt(p[0], g, 0, 0, 1.6f, g.players[1].z);
+    for (int k = 1; k <= G::kWinningScore; ++k) {
+        ready(g);
+        place(g, 0, 0, 8.5f);
+        place(g, 1, 0, 8.5f);
+        g.players[1].dead = 0;
+        g.players[1].hp = G::kMaxHp;
+        aimHead(p[0], g, 0);
         fire(p[0]);
         const uint32_t ev = g.step(tick, p);
-        CHECK(g.score[0] == round + 1);
-        if (round < G::kWinningScore - 1) {
-            CHECK(g.phase() == arcade::MatchPhase::RoundEnd && (ev & G::Round) && !(ev & G::Finish));
-            run(g, p, int(G::kRoundPause / tick) + 2);
-            CHECK(g.phase() == arcade::MatchPhase::Playing);
-        } else {
-            CHECK(g.phase() == arcade::MatchPhase::MatchEnd && (ev & G::Finish) && g.winner == 0);
-        }
+        CHECK(g.score[0] == k && (ev & G::DieP1));
+        if (k < G::kWinningScore) CHECK(g.phase() == arcade::MatchPhase::Playing && g.winner == -1);
     }
-    // The match stays over.
-    const G frozen = g;
-    run(g, p, 120);
-    CHECK(g.phase() == arcade::MatchPhase::MatchEnd && g.score[0] == G::kWinningScore);
-    (void)frozen;
-}
-
-static void timeout() {
-    G g = fresh();
-    PadInput p[2] = {};
-    waitReady(g, p);
-    aimAt(p[0], g, 0, 0, 1.2f, g.players[1].z);
-    fire(p[0]);
-    g.step(tick, p);
-    p[0] = PadInput();
-    run(g, p, int(G::kRoundTime / tick) + 5);
-    CHECK(g.roundWinner == 0 && g.score[0] == 1 && g.phase() != arcade::MatchPhase::Playing);
-    G h = fresh();
-    run(h, p, int(G::kRoundTime / tick) + 5);
-    CHECK(h.roundWinner == -1 && h.score[0] == 0 && h.score[1] == 0 && h.phase() == arcade::MatchPhase::RoundEnd);
+    CHECK(g.phase() == arcade::MatchPhase::MatchEnd && g.winner == 0 && g.idle(0));
+    const uint8_t s0 = g.score[0];
+    quiet(p[0]);
+    run(g, p, 200);
+    CHECK(g.phase() == arcade::MatchPhase::MatchEnd && g.score[0] == s0 && g.players[1].dead > 0);
+    // A tie at 5 does not end the game; the next point does.
+    G t = duel();
+    t.score[0] = t.score[1] = 4;
+    PadInput pt[2] = {};
+    aimHead(pt[0], t, 0);
+    aimHead(pt[1], t, 1);
+    fire(pt[0]); fire(pt[1]);
+    t.step(tick, pt);
+    CHECK(t.score[0] == 5 && t.score[1] == 5 && t.phase() == arcade::MatchPhase::Playing && t.winner == -1);
+    for (int i = 0; i < 100 && (t.players[0].dead > 0 || t.players[1].dead > 0); ++i) t.step(tick, pt);
+    ready(t);
+    place(t, 0, 0, 8.5f);
+    place(t, 1, 0, 8.5f);
+    aimHead(pt[0], t, 0);
+    fire(pt[0]);
+    t.step(tick, pt);
+    CHECK(t.score[0] == 6 && t.phase() == arcade::MatchPhase::MatchEnd && t.winner == 0);
+    // A rematch swaps the sides: player 0 becomes team 1 and moves to the +z half, and the scores start again.
+    CHECK(g.team(0) == 0 && g.team(1) == 1);
+    g.begin(arcade::Mode::Host, 99);
+    CHECK(g.team(0) == 1 && g.team(1) == 0 && g.face(0) == -1.0f && g.score[0] == 0 && g.score[1] == 0 && g.winner == -1);
+    CHECK(g.players[0].z > 0 && g.players[1].z < 0 && g.phase() == arcade::MatchPhase::Playing);
+    // The stick follows the team: right is still the player's right.
+    ready(g);
+    place(g, 0, 0, 9.0f);
+    PadInput ps[2] = {};
+    ps[0].stickX = 100;
+    run(g, ps, 20);
+    CHECK(g.players[0].x < -1.0f);
+    // The next rematch swaps back.
+    g.phase_ = arcade::MatchPhase::MatchEnd;
+    g.begin(arcade::Mode::Host, 100);
+    CHECK(g.team(0) == 0 && g.players[0].z < 0);
+    // A new match that was not preceded by one that ended does not swap.
+    g.begin(arcade::Mode::Host, 101);
+    CHECK(g.team(0) == 0);
 }
 
 static void soloPractice() {
-    G g = fresh(arcade::Mode::Solo);
+    bool seen[2] = {};
+    for (uint32_t seed = 0; seed < 16; ++seed) seen[fresh(arcade::Mode::Solo, seed).team(0)] = true;
+    CHECK(seen[0] && seen[1]);  // the team is random
+    G g = fresh(arcade::Mode::Solo, 42);
     PadInput p[2] = {};
     CHECK(g.solo);
-    // The target never moves, shoots or crouches, however long you wait; the round never times out.
-    const float x = g.players[1].x, z = g.players[1].z;
+    place(g, 0, 0, 8.5f);
+    place(g, 1, 0, 8.5f);
+    // The target never moves, shoots or jumps; the player is never hurt; nothing times out.
     run(g, p, 60 * 60);
-    CHECK(g.players[1].x == x && g.players[1].z == z && g.players[1].crouch == 0 && g.players[1].cooldown == 0);
-    CHECK(g.players[0].hp == G::kMaxHp && g.phase() == arcade::MatchPhase::Playing);
+    CHECK(g.players[1].x == 0 && std::fabs(depthOf(g, 1) - 8.5f) < 1e-4f && g.players[1].jumpT == 0);
+    CHECK(g.players[0].hp == G::kMaxHp && g.phase() == arcade::MatchPhase::Playing && g.score[1] == 0);
     // A stray input for the second player is ignored in solo.
-    p[1].aCount = 5; p[1].stickX = 100; p[1].b = true;
+    p[1].aCount = 5; p[1].stickX = 100; p[1].jumpCount = 3;
     run(g, p, 30);
-    CHECK(g.players[1].x == x && g.players[1].crouch == 0);
-    // Kills accumulate without ever ending the practice, and the target respawns in the zone.
+    CHECK(g.players[1].x == 0 && g.players[1].jumpT == 0 && g.score[1] == 0);
+    // Kills pile up without ending the practice; the target comes back in plain sight of the player.
     p[1] = PadInput();
-    float xs = 0;
-    for (int k = 1; k <= 8; ++k) {
-        waitReady(g, p);
-        aimAt(p[0], g, 0, g.players[1].x, 1.6f, g.players[1].z);
+    g.prime(p);
+    int distinct = 0;
+    float lastX = -99, lastZ = -99;
+    for (int k = 1; k <= 14; ++k) {
+        ready(g);
+        g.players[1].hp = G::kMaxHp;
+        aimHead(p[0], g, 0);
         fire(p[0]);
         g.step(tick, p);
-        CHECK(g.score[0] == k && g.phase() == arcade::MatchPhase::RoundEnd);
-        run(g, p, int(G::kRoundPause / tick) + 2);
-        CHECK(g.phase() == arcade::MatchPhase::Playing && g.players[1].hp == G::kMaxHp);
-        CHECK(std::fabs(g.players[1].x) <= 3.0f + 1e-3f);
-        xs = std::max(xs, std::fabs(g.players[1].x - x));
+        CHECK(g.score[0] == k && g.phase() == arcade::MatchPhase::Playing);
+        quiet(p[0]);
+        for (int i = 0; i < 100 && g.players[1].dead > 0; ++i) g.step(tick, p);
+        const auto& tg = g.players[1];
+        CHECK(tg.dead == 0 && tg.hp == G::kMaxHp && tg.invuln > 1.0f);
+        CHECK(g.segmentClear(g.players[0].x, G::kEye, g.players[0].z, tg.x, G::kStandHeight - 0.2f, tg.z));
+        CHECK(depthOf(g, 1) >= G::kNearZ && depthOf(g, 1) <= G::kFarZ && !G::blockedAt(tg.x, tg.z, G::kCollideRadius));
+        if (std::fabs(tg.x - lastX) > 0.3f || std::fabs(tg.z - lastZ) > 0.3f) ++distinct;
+        lastX = tg.x; lastZ = tg.z;
     }
-    CHECK(xs > 0.3f);
+    CHECK(distinct >= 10);
+    CHECK(g.score[0] == 14 && g.winner == -1);
+    CHECK(g.players[0].z * g.players[1].z < 0);  // the target is on the other side
 }
 
 static void inputsAndPrime() {
     G g = fresh();
     PadInput p[2] = {};
-    p[0].aCount = 9;
+    p[0].aCount = 9; p[0].jumpCount = 4;
     g.prime(p);
-    waitReady(g, p);
-    CHECK(!(g.step(tick, p) & G::ShotP0));
-    // Pressing during the opening cooldown fires as soon as it ends.
-    G h = fresh();
-    PadInput q[2] = {};
-    q[0].aCount = 0;
-    ++q[0].aCount;
-    h.step(tick, q);
-    bool fired = false;
-    for (int i = 0; i < 60 && !fired; ++i) fired = (h.step(tick, q) & G::ShotP0) != 0;
-    CHECK(!fired);
-    G k = fresh();
-    PadInput r[2] = {};
-    run(k, r, int(G::kRoundStartCooldown / tick) - 3);
-    ++r[0].aCount;
-    fired = false;
-    for (int i = 0; i < 10 && !fired; ++i) fired = (k.step(tick, r) & G::ShotP0) != 0;
-    CHECK(fired);
-    // Frozen between rounds: input does nothing.
-    G e = fresh();
-    PadInput s[2] = {};
-    waitReady(e, s);
-    aimAt(s[0], e, 0, 0, 1.6f, e.players[1].z);
-    ++s[0].aCount;
-    e.step(tick, s);
-    const float zBefore = e.players[0].z;
-    s[0].stickY = 100;
-    run(e, s, 10);
-    CHECK(e.players[0].z == zBefore);
+    place(g, 0, 0, 9.0f);
+    run(g, p, 60);
+    CHECK(g.players[0].jumpT == 0 && g.players[0].stamina == 1.0f && g.players[0].cooldown == 0 && g.players[0].flash == 0);
+    // A press made while dead does not fire or hop when the player comes back.
+    G d = duel();
+    PadInput pd[2] = {};
+    aimHead(pd[0], d, 0);
+    fire(pd[0]);
+    d.step(tick, pd);
+    quiet(pd[0]);
+    fire(pd[1]); jump(pd[1], 0, 100);
+    run(d, pd, 130);
+    CHECK(d.players[1].dead == 0 && d.players[1].jumpT == 0 && d.players[1].cooldown == 0 && d.players[1].flash == 0);
+}
+
+static bool same(const G& a, const G& b) {
+    arcade::Writer x, y;
+    a.encode(x);
+    b.encode(y);
+    return x.n == y.n && memcmp(x.buf, y.buf, x.n) == 0;
 }
 
 static void codec() {
-    G g = fresh();
+    G g = duel();
     PadInput p[2] = {};
-    waitReady(g, p);
-    p[0].stickX = 70; p[0].stickY = 30; p[0].aim = 33.3f; p[0].pitch = -8.4f; p[0].b = true;
+    place(g, 0, -1.2f, 9.4f);
+    place(g, 1, 1.1f, 12.2f);
+    p[0].stickX = 70; p[0].stickY = 30; p[0].aim = 33.3f; p[0].pitch = -8.4f;
     p[1].stickX = -40; p[1].stickY = 90; p[1].aim = -71.2f; p[1].pitch = 12.7f;
-    aimAt(p[0], g, 0, 0, 1.2f, g.players[1].z);
-    ++p[0].aCount;
-    run(g, p, 17);
+    aimAt(p[0], g, 0, 1.1f, 1.0f, g.players[1].z);
+    fire(p[0]);
+    jump(p[1], 100, 100);
+    run(g, p, 7);
+    g.gate.state = G::GateState::Opening; g.gate.pos = 0.43f; g.gate.timer = 0.5f;
+    g.score[0] = 2; g.score[1] = 1;
     arcade::Writer w;
     g.encode(w);
-    CHECK(w.n < 120);
+    CHECK(w.n < 140);
     G c;
     c.begin(arcade::Mode::Client, 1);
     arcade::Reader r(w.buf, w.n);
@@ -359,6 +670,26 @@ static void codec() {
     c.encode(w2);
     CHECK(w.n == w2.n && memcmp(w.buf, w2.buf, w.n) == 0);
     CHECK(std::fabs(c.players[0].x - g.players[0].x) < 1e-3f && std::fabs(c.players[0].yaw - g.players[0].yaw) < 1e-2f);
+    CHECK(c.score[0] == 2 && c.score[1] == 1 && c.gate.state == G::GateState::Opening && std::fabs(c.gate.pos - 0.43f) < 0.01f);
+    CHECK(c.players[1].jumpT > 0 && std::fabs(G::jumpHeight(c.players[1]) - G::jumpHeight(g.players[1])) < 0.02f);
+    // A dead player with its timers, in a swapped match, round-trips too.
+    G d = duel();
+    d.begin(arcade::Mode::Host, 5);
+    d.phase_ = arcade::MatchPhase::MatchEnd;
+    d.begin(arcade::Mode::Host, 6);
+    ready(d);
+    place(d, 0, 0, 8.5f); place(d, 1, 0, 8.5f);
+    PadInput pk[2] = {};
+    aimHead(pk[0], d, 0);
+    fire(pk[0]);
+    d.step(tick, pk);
+    run(d, pk, 20);
+    arcade::Writer wd;
+    d.encode(wd);
+    G cd;
+    cd.begin(arcade::Mode::Client, 1);
+    arcade::Reader rd(wd.buf, wd.n);
+    CHECK(cd.decode(rd) && same(cd, d) && cd.swap_ == 1 && cd.players[1].dead > 0 && cd.players[1].hp == 0);
     // Truncated and corrupt data is rejected and leaves the state untouched.
     const G before = c;
     for (size_t cut = 0; cut < w.n; ++cut) {
@@ -378,146 +709,54 @@ static void codec() {
             mutated[at] ^= uint8_t(1 << bit);
             arcade::Reader m(mutated, w.n);
             G probe = before;
-            const bool ok = probe.decode(m);
-            if (!ok) CHECK(same(probe, before));
-            else { arcade::Writer w3; probe.encode(w3); arcade::Reader again(w3.buf, w3.n); G twice = before; CHECK(twice.decode(again)); }
+            if (!probe.decode(m)) CHECK(same(probe, before));
+            else {
+                arcade::Writer w3;
+                probe.encode(w3);
+                arcade::Reader again(w3.buf, w3.n);
+                G twice = before;
+                CHECK(twice.decode(again));
+            }
         }
     }
-    // A player outside their own zone is not valid state.
-    G bad = g;
-    bad.players[0].z = 3;
-    arcade::Writer wb;
-    bad.encode(wb);
-    arcade::Reader rb(wb.buf, wb.n);
-    CHECK(!c.decode(rb));
-    bad = g;
-    bad.players[1].hp = 200;
-    arcade::Writer wh;
-    bad.encode(wh);
-    arcade::Reader rh(wh.buf, wh.n);
-    CHECK(!c.decode(rh));
+    // States the rules can never produce are not valid.
+    auto invalid = [&](void (*poke)(G&)) {
+        G bad = g;
+        poke(bad);
+        arcade::Writer wb;
+        bad.encode(wb);
+        arcade::Reader rb(wb.buf, wb.n);
+        G probe = before;
+        CHECK(!probe.decode(rb));
+        CHECK(same(probe, before));
+    };
+    invalid([](G& s) { s.players[0].z = 3; });                                   // outside its own half
+    invalid([](G& s) { s.players[1].hp = 200; });
+    invalid([](G& s) { s.players[0].dead = 1.0f; });                              // dead with health left
+    invalid([](G& s) { s.players[0].invuln = 3.0f; });
+    invalid([](G& s) { s.players[0].jumpT = 1.0f; });
+    invalid([](G& s) { s.swap_ = 2; });
+    invalid([](G& s) { s.phase_ = static_cast<arcade::MatchPhase>(1); });
+    invalid([](G& s) { s.phase_ = arcade::MatchPhase::MatchEnd; });               // over without a winner
+    invalid([](G& s) { s.score[0] = 5; s.winner = -1; });
+    invalid([](G& s) { s.gate.state = static_cast<G::GateState>(4); });
     // A client shows its own sensor straight away.
     c.localInput(1, p[1]);
     CHECK(std::fabs(c.lookYaw(1) - p[1].aim) < 1e-4f && c.lookYaw(0) == c.players[0].yaw);
 }
 
-static void gyroLook() {
-    using arcade::GyroLook;
-    // Device held upright in landscape: gravity along the device's X axis (up), screen right edge along +Y.
-    auto turn = [](GyroLook& l, float ax, float ay, float az, float gx, float gy, float gz, int frames) {
-        for (int i = 0; i < frames; ++i) l.update(ax, ay, az, gx, gy, gz, tick);
-    };
-    GyroLook l;
-    l.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
-    l.reset();
-    // Holding still: no drift, even with a small constant bias that the estimator absorbs.
-    turn(l, 1, 0, 0, 0.8f, -0.6f, 0.5f, 240);
-    CHECK(std::fabs(l.yaw()) < 1.0f && std::fabs(l.pitch()) < 1.0f && l.settled());
-    // Turning about the vertical axis (here +X is up) turns the view by the gain; clockwise seen from above is right.
-    l.recenter();
-    turn(l, 1, 0, 0, -10, 0, 0, 60);  // 10 deg/s for 1 s
-    CHECK(std::fabs(l.yaw() - 30.0f * GyroLook::kYawSign) < 3.0f);
-    // The same turn gives the same yaw however the device is tilted: gravity is the reference.
-    GyroLook t;
-    t.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
-    t.reset();
-    turn(t, 0, 0, 1, 0, 0, 0, 120);
-    t.recenter();
-    turn(t, 0, 0, 1, 0, 0, -10, 60);
-    CHECK(std::fabs(t.yaw() - l.yaw()) < 3.0f);
-    // The view is limited, and returns as soon as the device does: no wind-up.
-    GyroLook c;
-    c.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
-    c.reset();
-    turn(c, 1, 0, 0, 0, 0, 0, 120);
-    turn(c, 1, 0, 0, -40, 0, 0, 120);  // 80 deg of device turn, far beyond the 30 that reach the limit
-    CHECK(c.yaw() == 90.0f * GyroLook::kYawSign || c.yaw() == -90.0f * GyroLook::kYawSign);
-    const float limit = c.yaw();
-    turn(c, 1, 0, 0, 40, 0, 0, 20);  // 13 deg back
-    CHECK(std::fabs(c.yaw()) < std::fabs(limit) - 20.0f);
-    // Pitch follows the angle at which the screen faces up (gyro about the screen's right edge, tied to gravity) and
-    // is limited. Raising the top edge towards the player (the screen turns to face down) looks up.
-    GyroLook p;
-    p.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
-    p.reset();
-    auto tilt = [&](GyroLook& l, float from, float to, int frames) {
-        for (int i = 1; i <= frames; ++i) {
-            const float s = (from + (to - from) * i / frames) / rad;
-            l.update(std::cos(s), 0, std::sin(s), 0, (to - from) / (frames * tick), 0, tick);
-        }
-    };
-    turn(p, 1, 0, 0, 0, 0, 0, 120);
-    tilt(p, 0, 10, 60);  // screen turns to face up by 10 degrees
-    CHECK(std::fabs(p.pitch() - 20.0f * GyroLook::kPitchSign) < 2.0f && std::fabs(p.yaw()) < 0.5f);
-    CHECK(GyroLook::kPitchSign < 0 ? p.pitch() < 0 : p.pitch() > 0);
-    tilt(p, 10, 0, 60);
-    CHECK(std::fabs(p.pitch()) < 1.0f);
-    tilt(p, 0, -10, 60);
-    CHECK(GyroLook::kPitchSign < 0 ? p.pitch() > 10 : p.pitch() < -10);
-    tilt(p, -10, 60, 120);
-    CHECK(std::fabs(p.pitch()) == 30.0f);
-    p.recenter();
-    CHECK(p.yaw() == 0 && p.pitch() == 0);
-    // A gyro that reports a steady turn the device is not making cannot walk the view away: gravity holds it.
-    GyroLook d;
-    d.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
-    d.reset();
-    turn(d, 1, 0, 0, 0, 0, 0, 120);
-    turn(d, 1, 0, 0, 0, 2.5f, 0, 1200);  // 20 s of 2.5 deg/s bias on the pitch axis
-    CHECK(std::fabs(d.pitch()) < 3.0f);
-    // Absurd time steps are ignored.
-    GyroLook s;
-    s.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
-    s.reset();
-    s.update(1, 0, 0, 500, 500, 500, 5.0f);
-    s.update(1, 0, 0, 500, 500, 500, 0.0f);
-    CHECK(s.yaw() == 0 && s.pitch() == 0);
-    // A gain that grows with the view angle is fine near the centre and quick towards the limit, and a turn
-    // there and back always returns to the same view.
-    GyroLook v;
-    v.configure(1.0f, 5.0f, 1.0f, 3.0f, 90, 30);
-    v.reset();
-    turn(v, 1, 0, 0, 0, 0, 0, 120);
-    turn(v, 1, 0, 0, -10, 0, 0, 30);  // 5 deg of device turn
-    CHECK(std::fabs(v.yaw()) > 3.0f && std::fabs(v.yaw()) < 8.0f);
-    v.recenter();
-    int frames = 0;
-    while (std::fabs(v.yaw()) < 90.0f && frames < 600) { v.update(1, 0, 0, -20, 0, 0, tick); ++frames; }
-    const float travelled = 19.6f * frames * tick;  // deg/s after the dead zone times seconds
-    CHECK(travelled > 30.0f && travelled < 45.0f);
-    for (int i = 0; i < frames; ++i) v.update(1, 0, 0, 20, 0, 0, tick);
-    CHECK(std::fabs(v.yaw()) < 2.0f);
-}
-
-static void stickMap() {
-    arcade::StickAxis a;
-    a.seed(128);
-    CHECK(a.map(128) == 0 && a.map(135) == 0 && a.map(121) == 0);
-    CHECK(a.map(128 + 96) == 100 && a.map(128 - 96) == -100);
-    CHECK(a.map(128 + 60) > 0 && a.map(128 + 60) < 100 && a.map(128 - 60) == -a.map(128 + 60));
-    // Travel further than assumed is learned, never above full scale.
-    CHECK(a.map(255) == 100 && a.range <= 127.0f);
-    CHECK(a.map(128 + 96) < 100);
-    // A different rest value is honoured.
-    arcade::StickAxis b;
-    b.seed(120);
-    CHECK(b.map(120) == 0 && b.map(215) > 90);
-}
-
 int main() {
+    world();
     movement();
-    viewLimits();
-    staminaAndCrouch();
+    jumping();
     shooting();
-    coverAndPeeking();
-    doubleKnockout();
+    coverAndSight();
+    gate();
+    lifeAndDeath();
     matchFlow();
-    timeout();
     soloPractice();
     inputsAndPrime();
     codec();
-    gyroLook();
-    stickMap();
     puts(failures ? "FAILURES" : "ALL PASSED");
     return failures ? 1 : 0;
 }

@@ -2,6 +2,7 @@
 
 #include <M5Unified.h>
 
+#include "core/stick_history.h"
 #include "core/stick_map.h"
 
 namespace joystick {
@@ -31,6 +32,8 @@ int8_t g_x = 0, g_y = 0;
 uint8_t g_rawA = 0, g_rawB = 0;
 bool g_held = false;
 uint8_t g_count = 0;
+arcade::StickHistory g_history;
+int8_t g_jumpX = 0, g_jumpY = 0;  // direction latched for the latest press
 
 }  // namespace
 
@@ -48,6 +51,7 @@ void setPower(bool on) {
     g_everOk = false;
     g_x = g_y = 0;
     g_held = false;
+    g_history.clear();
 }
 
 bool powered() { return g_power; }
@@ -83,8 +87,13 @@ void update() {
     g_x = kInvertRight ? static_cast<int8_t>(-right) : right;
     g_y = kInvertForward ? static_cast<int8_t>(-forward) : forward;
     const bool held = button == 0;
-    if (held && !g_held) ++g_count;
+    if (held && !g_held) {
+        ++g_count;
+        g_history.latch(now, g_jumpX, g_jumpY);
+    }
     g_held = held;
+    // The press itself nudges the stick, so the history only gets positions of an unpressed stick.
+    if (!held) g_history.push(now, g_x, g_y);
 }
 
 bool ok() { return g_power && g_everOk && millis() - g_lastOkMs < kLostMs; }
@@ -93,6 +102,8 @@ int8_t x() { return g_x; }
 int8_t y() { return g_y; }
 bool buttonHeld() { return g_held; }
 uint8_t pressCount() { return g_count; }
+int8_t pressX() { return g_jumpX; }
+int8_t pressY() { return g_jumpY; }
 void raw(uint8_t& a, uint8_t& b) { a = g_rawA; b = g_rawB; }
 
 }  // namespace joystick

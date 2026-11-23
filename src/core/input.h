@@ -27,8 +27,8 @@ uint8_t bCount();
 bool shaken();
 
 // Gyro view control for games that need the joystick. beginLook() starts the integration (see GyroLook::configure
-// for the gains and limits); keep the device still for a moment afterwards so the gyro bias can settle. Pressing
-// the joystick recentres the view.
+// for the gains and limits); keep the device still for a moment afterwards so the gyro bias can settle. While it
+// runs, B recentres the view (and nothing else should use B).
 void beginLook(float yawGainCenter, float yawGainEdge, float pitchGainCenter, float pitchGainEdge,
                float yawLimit, float pitchLimit);
 void endLook();

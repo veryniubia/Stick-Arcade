@@ -21,6 +21,9 @@ int8_t y();
 
 bool buttonHeld();
 uint8_t pressCount();  // stick presses so far (wraps)
+// Stick direction to attach to the latest press: the position just before it (-100..100, same frame as x()/y()).
+int8_t pressX();
+int8_t pressY();
 
 // Raw 8-bit readings of the unit's two axes, for diagnostics.
 void raw(uint8_t& a, uint8_t& b);

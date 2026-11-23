@@ -11,8 +11,10 @@ import subprocess
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
-NAMES = ['start', 'aimed', 'peek', 'hidden', 'left', 'right', 'up', 'down', 'close_crouch', 'shot', 'hurt', 'p2_view',
-         'point', 'match_end', 'solo', 'lobby', 'card0', 'card1']
+NAMES = ['start', 'far', 'gate_closed', 'gate_open', 'gate_warn', 'gate_lifting', 'barrels', 'left', 'right', 'up', 'down',
+         'team1_view', 'team1_down', 'foe_at_me', 'foe_left', 'foe_fires', 'foe_hurt', 'foe_hop', 'foe_falling', 'foe_down',
+         'foe_protected', 'foe_other_team', 'shot', 'hurt', 'dead', 'respawn_flash', 'protected', 'score', 'match_end',
+         'solo', 'lobby', 'card0', 'card1', 'card2']
 
 
 def main():

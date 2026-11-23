@@ -67,6 +67,7 @@ void debugPoll() {
                 if (!registry::get(i).info->needsJoystick) continue;
                 if (g_screen == Screen::Play) play::end();
                 joystick::setPower(true);
+                joystick::update();  // read once now: the play flow drops back to the menu when there is no reading
                 startPlay(i);
                 if (ch == 'Y') d.bPress = true;
                 break;
@@ -74,10 +75,10 @@ void debugPoll() {
         } else if (ch == 'J') {
             uint8_t a = 0, b = 0;
             joystick::raw(a, b);
-            Serial.printf("JOY powered=%d ok=%d raw=%u,%u x=%d y=%d btn=%d presses=%u look yaw=%.2f pitch=%.2f\n",
+            Serial.printf("JOY powered=%d ok=%d raw=%u,%u x=%d y=%d btn=%d presses=%u look yaw=%.2f pitch=%.2f hop=%d,%d bcount=%u\n",
                           joystick::powered() ? 1 : 0, joystick::ok() ? 1 : 0, a, b, joystick::x(), joystick::y(),
                           joystick::buttonHeld() ? 1 : 0, joystick::pressCount(), input::lookYawDeg(),
-                          input::lookPitchDeg());
+                          input::lookPitchDeg(), joystick::pressX(), joystick::pressY(), input::bCount());
         } else if (ch == 'W') {
             float gx = 0, gy = 0, gz = 0, ax = 0, ay = 0, az = 0;
             M5.Imu.getGyro(&gx, &gy, &gz);

@@ -55,6 +55,8 @@ uint8_t g_frozenACount = 0;
 uint8_t g_frozenBCount = 0;
 uint8_t g_aSkip = 0;  // presses made while the confirmation was open belong to the confirmation, not to the game
 uint8_t g_bSkip = 0;
+uint8_t g_frozenJumpCount = 0;
+uint8_t g_jumpSkip = 0;
 uint32_t g_stickLostMs = 0;  // when a game that needs the joystick noticed it was gone (0 = present)
 
 arcade::IGame& game() { return *g_gi.game; }
@@ -66,9 +68,14 @@ PadInput makePad() {
     if (g_entry->info->needsJoystick) {
         p.aim = input::lookYawDeg();
         p.pitch = input::lookPitchDeg();
+        p.jumpX = joystick::pressX();
+        p.jumpY = joystick::pressY();
         if (!g_exitAsk) {
             p.stickX = joystick::x();
             p.stickY = joystick::y();
+            p.jumpCount = joystick::pressCount() - g_jumpSkip;
+        } else {
+            p.jumpCount = g_frozenJumpCount - g_jumpSkip;
         }
     } else {
         p.aim = debug::aim(g_entry->info->portrait ? input::driveTiltDeg() : input::tiltDeg() * settings::aimGain());
@@ -95,6 +102,7 @@ void openExitAsk(uint32_t now) {
     g_frozenB = (input::bHeld() && g_bArmed) || debug::braking() || (!g_entry->info->portrait && debug::charging());
     g_frozenACount = input::aCount();
     g_frozenBCount = input::bCount() + debug::extraB();
+    g_frozenJumpCount = joystick::pressCount();
 }
 
 void closeExitAsk() {
@@ -103,6 +111,7 @@ void closeExitAsk() {
     const uint8_t bPresses = input::bCount() + debug::extraB() - g_frozenBCount;
     g_aSkip += aPresses;
     g_bSkip += bPresses;
+    g_jumpSkip += joystick::pressCount() - g_frozenJumpCount;
     // A new press used in the dialog must also stay out of play while held.
     if (aPresses && input::aHeld()) g_aArmed = false;
     if (bPresses && input::bHeld()) g_bArmed = false;
@@ -293,6 +302,7 @@ void begin(const registry::GameEntry& entry) {
     g_bArmed = true;
     g_exitAsk = false;
     g_aSkip = g_bSkip = 0;
+    g_jumpSkip = 0;
     g_stickLostMs = 0;
     g_radioOk = false;
     offline_trace::record("lobby", entry.info->wireId);

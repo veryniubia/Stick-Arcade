@@ -1,6 +1,7 @@
 #pragma once
 // Minimal host raster canvas for previewing the actual MoonDuel view without hardware.
 // Deliberately isolated on the preview compiler's include path; never used in firmware.
+#define MIDDIFF_HOST_CANVAS 1
 #include <algorithm>
 #include <array>
 #include <cmath>
