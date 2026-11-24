@@ -802,6 +802,18 @@ static void testMidDiffOverNetwork(float loss, int latency, int jitter) {
     CHECK(l.runUntil(2000,[&]{return midOf(h).players[1].jumpT>0;}));
     CHECK(l.runUntil(2000,[&]{return midOf(h).players[1].jumpT==0 && midOf(h).players[1].stamina<1.0f;}));
     CHECK(std::fabs(std::fabs(midOf(h).players[1].z)-(9.0f-MidDiffGame::kJumpDistance))<0.15f);
+    // The client shoots the shared pickup and then throws it through the real input link.
+    ready();c.in.pad.aim=0;c.in.pad.pitch=0;l.run(300);
+    auto& burger=midOf(h).burger;
+    burger.state=MidDiffGame::BurgerState::Pickup;burger.timer=0;burger.x=0;burger.y=MidDiffGame::kEye;burger.z=0;
+    ++c.in.pad.aCount;
+    CHECK(l.runUntil(2500,[&]{return midOf(h).holdingBurger(1) && midOf(c).holdingBurger(1);}));
+    l.run(1200);++c.in.pad.aCount;
+    CHECK(l.runUntil(1500,[&]{return midOf(c).burger.state==MidDiffGame::BurgerState::Flying;}));
+    CHECK(l.runUntil(3000,[&]{return midOf(c).burger.state==MidDiffGame::BurgerState::Blast;}));
+    l.run(600);
+    // Reset scores from the grenade before testing the ordinary five-kill match.
+    midOf(h).score[0]=midOf(h).score[1]=0;
     // Real kills: the client shoots the host's head each time; the scores replicate and the match ends on the fifth.
     for(int k=0;k<MidDiffGame::kWinningScore;++k) {
         ready();l.run(400);
@@ -813,7 +825,7 @@ static void testMidDiffOverNetwork(float loss, int latency, int jitter) {
     CHECK(l.runUntil(1500,[&]{return midOf(c).phase()==arcade::MatchPhase::MatchEnd;}));
     l.run(700);arcade::Writer a,b;midOf(h).encode(a);midOf(c).encode(b);
     // The gate keeps moving after the match (scenery), so the host is a little ahead of the client there: skip its 3 bytes.
-    CHECK(a.n==b.n && memcmp(a.buf,b.buf,14)==0 && memcmp(a.buf+17,b.buf+17,a.n-17)==0 && l.maxLen<=250);
+    CHECK(a.n==b.n && memcmp(a.buf,b.buf,24)==0 && memcmp(a.buf+27,b.buf+27,a.n-27)==0 && l.maxLen<=250);
     CHECK(midOf(c).winner==1 && midOf(h).winner==1);
     // Rematch: sides swap and the scores start again on both devices.
     const uint32_t seed=midOf(h).seed;

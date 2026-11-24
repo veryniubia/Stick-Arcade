@@ -65,7 +65,7 @@ bool hitBox(const float o[3], const float d[3], const float lo[3], const float h
 
 }  // namespace
 
-const arcade::GameInfo kMidDiffInfo = {"middiff", 6, 3, sizeof(MidDiffGame), 0, create, 2, false, true};
+const arcade::GameInfo kMidDiffInfo = {"middiff", 6, 5, sizeof(MidDiffGame), 0, create, 2, false, true};
 
 using K = MidDiffGame::Kind;
 // Mid wall (0..10): a doorway on each side of the centre arch, 4 m high, doorways 2.9 m. Left doorway: iron lift gate.
@@ -142,6 +142,7 @@ void MidDiffGame::begin(arcade::Mode mode, uint32_t s) {
     for (int i = 0; i < 2; ++i) { lastA_[i] = lastJump_[i] = 0; fireBuffer_[i] = 0; }
     players[0] = Player();
     players[1] = Player();
+    burger = Burger();
     gate = Gate();
     gate.timer = randomBetween(kGateClosedMin, kGateClosedMax);
     respawn(0);
@@ -160,6 +161,9 @@ void MidDiffGame::prime(const PadInput p[2]) {
 // Random spot in the team's own half that is clear of the covers. The solo target also has to be in plain sight of
 // the player, so practice is never spent hunting for it behind a wall.
 void MidDiffGame::respawn(int i) {
+    // A new life starts a fresh pickup window and clears the previous exchange's item.
+    burger = Burger();
+    burger.timer = randomBetween(kBurgerWaitMin, kBurgerWaitMax);
     const float side = face(i) > 0 ? -1.0f : 1.0f;
     float px = 0.0f, pz = side * kStartDepth;
     for (int k = 0; k < 32; ++k) {
@@ -365,6 +369,7 @@ bool MidDiffGame::segmentClear(float ox, float oy, float oz, float tx, float ty,
 uint32_t MidDiffGame::kill(int victim, int killer, bool head) {
     (void)head;
     Player& v = players[victim];
+    if (holdingBurger(victim)) { burger.state = BurgerState::Waiting; burger.timer = randomBetween(kBurgerWaitMin, kBurgerWaitMax); }
     v.hp = 0;
     v.dead = kRespawnTime;
     v.jumpT = 0;
@@ -381,6 +386,7 @@ uint32_t MidDiffGame::resolveShots(const bool fired[2]) {
     // Both shots are traced against the positions of this step before anyone loses health: a double hit is a double hit.
     for (int i = 0; i < 2; ++i) {
         if (!fired[i]) continue;
+        if (holdingBurger(i)) { throwBurger(i); events |= BurgerThrow; continue; }
         const Trace t = trace(i);
         Player& me = players[i];
         me.flash = 0.12f;
@@ -388,6 +394,19 @@ uint32_t MidDiffGame::resolveShots(const bool fired[2]) {
         me.shotY = t.y;
         me.shotZ = t.z;
         events |= i ? ShotP1 : ShotP0;
+        if (burger.state == BurgerState::Pickup) {
+            const float o[3] = {me.x, kEye + jumpHeight(me), me.z};
+            const float yaw = me.yaw * kDeg, pitch = me.pitch * kDeg;
+            const float d[3] = {std::sin(yaw)*std::cos(pitch)*face(i), std::sin(pitch), std::cos(yaw)*std::cos(pitch)*face(i)};
+            float distance;
+            if (hitSphere(o, d, burger.x, burger.y, burger.z, kBurgerRadius, distance) && distance < t.t) {
+                burger.state = BurgerState::Held; burger.owner = i; burger.timer = 0;
+                me.shotX = o[0]+d[0]*distance; me.shotY = o[1]+d[1]*distance; me.shotZ = o[2]+d[2]*distance;
+                me.marker = .25f; me.markerHead = me.markerShield = false;
+                events |= BurgerGet;
+                continue;
+            }
+        }
         if (!t.hit) continue;
         me.marker = 0.25f;
         me.markerHead = t.head;
@@ -422,12 +441,94 @@ uint32_t MidDiffGame::step(float dt, const PadInput in[2]) {
     for (int i = 0; i < 2; ++i) updateLife(i, dt);
     bool fired[2];
     for (int i = 0; i < 2; ++i) fired[i] = act(i, *pads[i], dt);
+    events |= updateBurger(dt);
+    // Do not let a blast victim fire on the same frame.
+    for (int i = 0; i < 2; ++i) if (players[i].dead > 0) fired[i] = false;
     events |= resolveShots(fired);
     if (!solo) {
         const int top = std::max(score[0], score[1]);
         if (top >= kWinningScore && score[0] != score[1]) {
             phase_ = arcade::MatchPhase::MatchEnd;
             winner = score[0] > score[1] ? 0 : 1;
+        }
+    }
+    return events;
+}
+
+
+void MidDiffGame::throwBurger(int i) {
+    const Player& p = players[i];
+    burger.state = BurgerState::Flying;
+    burger.timer = kBurgerFuse;
+    burger.x = p.x; burger.y = kEye + jumpHeight(p); burger.z = p.z;
+    const float yaw = p.yaw*kDeg, pitch = p.pitch*kDeg;
+    burger.vx = std::sin(yaw)*std::cos(pitch)*face(i)*kThrowSpeed;
+    burger.vz = std::cos(yaw)*std::cos(pitch)*face(i)*kThrowSpeed;
+    burger.vy = std::sin(pitch)*kThrowSpeed + 2.0f;
+}
+
+uint32_t MidDiffGame::updateBurger(float dt) {
+    if (burger.state == BurgerState::Pickup || burger.state == BurgerState::Held) return 0;
+    const float before = burger.timer;
+    decay(burger.timer, dt);
+    if (burger.state == BurgerState::Waiting) {
+        if (burger.timer == 0) {
+            // Central arch or above the two low barrels: reachable by shots from both halves.
+            static const float spots[][3] = {{-.45f,1.9f,0}, {.45f,2.3f,0}, {0,1.1f,0}, {3.5f,1.6f,0}, {4.15f,1.7f,0}};
+            const int n = static_cast<int>(random01()*5);
+            burger.x=spots[n][0]; burger.y=spots[n][1]; burger.z=spots[n][2];
+            burger.state = BurgerState::Pickup;
+            burger.timer = 0;
+        }
+        return 0;
+    }
+    if (burger.state == BurgerState::Blast) {
+        if (burger.timer == 0) { burger.state = BurgerState::Waiting; burger.timer = randomBetween(kBurgerWaitMin, kBurgerWaitMax); }
+        return 0;
+    }
+    // A closing gate can move onto a resting grenade; eject it to the nearest side.
+    const Box& gateBox = boxes[0];
+    if (boxBottom(0)<gateBox.y1-1e-4f && burger.x>gateBox.x0-kGrenadeRadius && burger.x<gateBox.x1+kGrenadeRadius &&
+        burger.y>boxBottom(0)-kGrenadeRadius && burger.y<gateBox.y1+kGrenadeRadius &&
+        burger.z>gateBox.z0-kGrenadeRadius && burger.z<gateBox.z1+kGrenadeRadius) {
+        const float side=burger.z<0 ? -1.f : 1.f;
+        burger.z=side*(gateBox.z1+kGrenadeRadius+.001f);
+        burger.vz=side*maxf(1.f,std::fabs(burger.vz)*.55f);
+    }
+    // Small steps prevent a fast projectile tunnelling through the thin moving gate.
+    float remaining = minf(dt, before);
+    while (remaining > 0) {
+        const float h = minf(remaining, .004f); remaining -= h;
+        burger.vy -= kGravity*h;
+        float* pos[3] = {&burger.x,&burger.y,&burger.z};
+        float* vel[3] = {&burger.vx,&burger.vy,&burger.vz};
+        for (int a=0;a<3;++a) {
+            const float old = *pos[a];
+            *pos[a] += *vel[a]*h;
+            bool blocked = burger.y < kGrenadeRadius || std::fabs(burger.x)>kArenaHalfWidth-kGrenadeRadius || std::fabs(burger.z)>kWallZ-kGrenadeRadius;
+            for (int b=0;b<kBoxCount && !blocked;++b) {
+                const Box& box=boxes[b]; const float bottom=boxBottom(b);
+                if (bottom >= box.y1-1e-4f) continue;
+                blocked = burger.x>box.x0-kGrenadeRadius && burger.x<box.x1+kGrenadeRadius &&
+                    burger.y>bottom-kGrenadeRadius && burger.y<box.y1+kGrenadeRadius &&
+                    burger.z>box.z0-kGrenadeRadius && burger.z<box.z1+kGrenadeRadius;
+            }
+            if (blocked) { *pos[a]=old; *vel[a]*=-.55f;
+                if (a==1) { burger.vx*=.82f; burger.vz*=.82f; if (std::fabs(burger.vy)<.25f) burger.vy=0; }
+            }
+        }
+    }
+    uint32_t events = static_cast<int>(before*4) != static_cast<int>(burger.timer*4) ? BurgerTick : 0;
+    if (burger.timer > 0) return events;
+    burger.state = BurgerState::Blast; burger.timer = .45f;
+    events |= BurgerBoom;
+    for (int i=0;i<2;++i) {
+        const Player& p=players[i];
+        if (p.dead>0 || p.invuln>0) continue;
+        const float y=jumpHeight(p)+.9f;
+        const float dx=p.x-burger.x, dy=y-burger.y, dz=p.z-burger.z;
+        if (dx*dx+dy*dy+dz*dz <= kBlastRadius*kBlastRadius && segmentClear(burger.x,burger.y,burger.z,p.x,y,p.z)) {
+            events |= (i ? HurtP1 : HurtP0) | kill(i,1-i,false);
         }
     }
     return events;
@@ -441,6 +542,9 @@ void MidDiffGame::localInput(int local, const PadInput& in) {
 }
 
 void MidDiffGame::encode(arcade::Writer& w) const {
+    w.u8(static_cast<uint8_t>(burger.state)); w.u8(burger.owner);
+    w.i16(arcade::q16(burger.timer, 1000));
+    w.i16(arcade::q16(burger.x, 1024)); w.i16(arcade::q16(burger.y, 1024)); w.i16(arcade::q16(burger.z, 1024));
     w.u32(seed);
     w.u8(static_cast<uint8_t>(phase_));
     w.u8(static_cast<uint8_t>(winner));
@@ -475,6 +579,13 @@ void MidDiffGame::encode(arcade::Writer& w) const {
 
 bool MidDiffGame::decode(arcade::Reader& r) {
     MidDiffGame n = *this;
+    const uint8_t bs = r.u8(); n.burger.owner = r.u8();
+    n.burger.state = static_cast<BurgerState>(bs);
+    n.burger.timer = r.i16()/1000.f;
+    n.burger.x = r.i16()/1024.f; n.burger.y = r.i16()/1024.f; n.burger.z = r.i16()/1024.f;
+    if (bs>4 || n.burger.owner>1 || n.burger.timer<0 || n.burger.timer>kBurgerWaitMax+.001f ||
+        std::fabs(n.burger.x)>kArenaHalfWidth || std::fabs(n.burger.z)>kWallZ || n.burger.y<0 || n.burger.y>12 ||
+        (bs==3 && n.burger.timer>kBurgerFuse+.001f) || (bs==4 && n.burger.timer>.451f)) return false;
     n.seed = r.u32();
     const uint8_t phase = r.u8();
     n.winner = static_cast<int8_t>(r.u8());

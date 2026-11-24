@@ -99,6 +99,25 @@ int main(int argc,char** argv) {
     ctx.solo=false;
     middiff_view::drawLobby(1200);save("lobby");
     for(int k=0;k<3;++k){canvas.fillRect(0,0,240,135,0);middiff_view::drawCard(60,28,120,78,600+k*1100);save(("card"+std::to_string(k)).c_str());}
+    g=fresh();place(g,0,0,8.5f);place(g,1,0,8.5f);
+    g.burger.state=G::BurgerState::Pickup;g.burger.x=.45f;g.burger.y=2.3f;g.burger.z=0;
+    g.draw(0,ctx);save("burger_pickup");
+    g.burger.state=G::BurgerState::Held;g.burger.owner=0;g.draw(0,ctx);save("burger_held");
+    g.burger.state=G::BurgerState::Flying;g.burger.x=.4f;g.burger.y=1.9f;g.burger.z=-5.8f;g.burger.timer=1.88f;
+    g.draw(0,ctx);save("burger_throw");
+    g.burger.y=1.4f;g.burger.z=-4;g.burger.timer=.7f;g.draw(0,ctx);save("burger_flying");
+    g.burger.state=G::BurgerState::Blast;g.burger.timer=.36f;g.draw(0,ctx);save("burger_blast");
+    g.burger.timer=.16f;g.draw(0,ctx);save("burger_smoke");
+    // Capture the real rules and renderer at 30 FPS, including the throw, bounces and blast.
+    g=fresh();place(g,0,0,8.5f);place(g,1,0,8.5f);openGate(g);
+    g.burger.state=G::BurgerState::Held;g.burger.owner=0;
+    PadInput inputs[2]={};g.prime(inputs);
+    for(int frame=0;frame<105;++frame) {
+        if(frame==20)++inputs[0].aCount;
+        if(frame>=20) {g.step(1.f/60,inputs);g.step(1.f/60,inputs);}
+        ctx.nowMs=1200+frame*33;g.draw(0,ctx);
+        char name[40];std::snprintf(name,sizeof(name),"burger_anim_%03d",frame);save(name);
+    }
     // Frame cost of the renderer on this PC (indicative only).
     g=fresh();place(g,0,0,8.5f);place(g,1,0,8.5f);aimAtFoe(g,0);openGate(g);
     auto t0=std::chrono::steady_clock::now();

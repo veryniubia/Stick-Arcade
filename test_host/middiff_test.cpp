@@ -749,7 +749,86 @@ static void codec() {
     CHECK(std::fabs(c.lookYaw(1) - p[1].aim) < 1e-4f && c.lookYaw(0) == c.players[0].yaw);
 }
 
+static void burgers() {
+    PadInput p[2]={}; G g=duel();
+    const float firstSpawn=g.burger.timer;
+    CHECK(firstSpawn>=8 && firstSpawn<=15);
+    run(g,p,479); CHECK(g.burger.state==G::BurgerState::Waiting);
+    while(g.burger.state==G::BurgerState::Waiting) g.step(tick,p);
+    CHECK(g.elapsed>=8 && g.elapsed<=15.02f && g.burger.timer==0);
+    run(g,p,1200); CHECK(g.burger.state==G::BurgerState::Pickup);
+    g.burger.state=G::BurgerState::Pickup;g.burger.timer=0;
+    g.burger.x=0; g.burger.y=1.9f; g.burger.z=0;
+    aimAt(p[0],g,0,0,1.9f,0); fire(p[0]); g.step(tick,p);
+    CHECK(g.holdingBurger(0) && g.players[1].hp==100);
+    fire(p[0]); g.step(tick,p); CHECK(g.holdingBurger(0));
+    run(g,p,70); fire(p[0]); g.step(tick,p);
+    CHECK(g.burger.state==G::BurgerState::Flying && g.burger.timer==G::kBurgerFuse);
+    run(g,p,119); CHECK(g.burger.state==G::BurgerState::Flying);
+    run(g,p,2); CHECK(g.burger.state==G::BurgerState::Blast);
+    run(g,p,28); CHECK(g.burger.state==G::BurgerState::Waiting);
+    // Closed gate blocks a pickup shot.
+    g=duel(); p[0]=PadInput(); g.burger.state=G::BurgerState::Pickup;g.burger.timer=0;
+    g.burger.x=-3;g.burger.y=2;g.burger.z=.6f;place(g,0,-3,8);
+    aimAt(p[0],g,0,-3,2,.6f);fire(p[0]);g.step(tick,p);
+    CHECK(!g.holdingBurger(0));
+    // Floor and thin gate bounce, with no early detonation.
+    g=duel();g.burger.state=G::BurgerState::Flying;g.burger.timer=2;
+    g.burger.x=0;g.burger.y=.16f;g.burger.z=-4;g.burger.vy=-10;
+    g.step(tick,p);CHECK(g.burger.vy>0 && g.burger.y>=G::kGrenadeRadius);
+    g.burger.x=-3;g.burger.y=2;g.burger.z=-.4f;g.burger.vz=18;g.burger.vy=0;
+    g.step(tick,p);CHECK(g.burger.vz<0 && g.burger.z<0);
+    // Lethal blast, protection, radius, cover, suicide credit.
+    for(int mode=0;mode<5;++mode) {
+        g=duel();g.burger.state=G::BurgerState::Flying;g.burger.timer=.001f;
+        g.burger.x=0;g.burger.y=.3f;g.burger.z=8;
+        int victim=1;
+        if(mode==1) g.players[1].invuln=1;
+        if(mode==2) g.burger.z=5;
+        if(mode==3) {place(g,1,-3,7.3f);g.burger.x=-3;g.burger.z=5.8f;}
+        if(mode==4) {g.burger.z=-8;victim=0;}
+        g.step(tick,p);
+        CHECK((g.players[victim].hp==0)==(mode==0 || mode==4));
+        if(mode==0 || mode==4) CHECK(g.score[1-victim]==1);
+    }
+    // Respawning clears unclaimed, held and in-flight burgers and restarts the random wait.
+    for (int state=1;state<=3;++state) {
+        g=duel(); g.burger.state=static_cast<G::BurgerState>(state);
+        g.burger.timer=state==3?1.f:0.f;g.burger.y=2;
+        g.players[1].dead=.001f;g.players[1].hp=0;
+        g.step(tick,p);
+        CHECK(g.burger.state==G::BurgerState::Waiting && g.burger.timer>7.9f && g.burger.timer<=15);
+    }
+    // Closing gates eject an overlapping grenade rather than trapping it inside geometry.
+    g=duel();g.burger.state=G::BurgerState::Flying;g.burger.timer=1;
+    g.burger.x=-3;g.burger.y=2;g.burger.z=-.01f;
+    g.step(tick,p);CHECK(g.burger.z<-.3f && g.burger.vz<0);
+    // Death cancels a held item, but a thrown grenade survives its owner's death.
+    for(int thrown=0;thrown<2;++thrown) {
+        g=duel();p[0]=p[1]=PadInput();g.burger.owner=0;
+        g.burger.state=thrown?G::BurgerState::Flying:G::BurgerState::Held;
+        g.burger.timer=1;g.burger.x=0;g.burger.y=2;g.burger.z=-3;
+        aimHead(p[1],g,1);fire(p[1]);g.step(tick,p);
+        CHECK(g.players[0].dead>0);
+        CHECK(g.burger.state==(thrown?G::BurgerState::Flying:G::BurgerState::Waiting));
+        g.begin(arcade::Mode::Solo,3);CHECK(g.burger.state==G::BurgerState::Waiting && g.burger.timer>=8 && g.burger.timer<=15);
+    }
+    // An explosion can win a match.
+    g=duel();p[0]=p[1]=PadInput();g.score[0]=4;
+    g.burger.state=G::BurgerState::Flying;g.burger.timer=.001f;
+    g.burger.x=0;g.burger.y=.3f;g.burger.z=8;
+    g.step(tick,p);CHECK(g.phase()==arcade::MatchPhase::MatchEnd && g.winner==0);
+    // Every visible lifecycle state survives replication.
+    for(int state=0;state<=4;++state) {
+        g=duel();g.burger.state=static_cast<G::BurgerState>(state);g.burger.timer=.2f;
+        g.burger.x=.4f;g.burger.y=2;g.burger.z=3;g.burger.owner=1;
+        arcade::Writer w;g.encode(w);G c; c.begin(arcade::Mode::Client,1);
+        arcade::Reader r(w.buf,w.n);CHECK(c.decode(r) && same(g,c));
+    }
+}
+
 int main() {
+    burgers();
     world();
     movement();
     jumping();

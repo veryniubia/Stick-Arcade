@@ -11,7 +11,7 @@ import subprocess
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
-NAMES = ['start', 'far', 'scope', 'bolt', 'gate_closed', 'gate_open', 'gate_warn', 'gate_lifting', 'barrels', 'left', 'right', 'up', 'down',
+NAMES = ['burger_pickup', 'burger_held', 'burger_throw', 'burger_flying', 'burger_blast', 'burger_smoke', 'start', 'far', 'scope', 'bolt', 'gate_closed', 'gate_open', 'gate_warn', 'gate_lifting', 'barrels', 'left', 'right', 'up', 'down',
          'team1_view', 'team1_down', 'foe_at_me', 'foe_left', 'foe_fires', 'foe_hurt', 'foe_hop', 'foe_falling', 'foe_down',
          'foe_protected', 'foe_other_team', 'shot', 'hurt', 'dead', 'respawn_flash', 'protected', 'score', 'match_end',
          'solo', 'lobby', 'card0', 'card1', 'card2']
@@ -51,6 +51,18 @@ def main():
         sheet.paste(tile, (x, y))
         draw.text((x, y - 17), name, fill='#e7e6c2')
     sheet.save(out / 'contact-sheet.png')
+    # A compact review board and a nearest-neighbour enlarged animation from actual gameplay frames.
+    stages = [('burger_held', 'HELD'), ('burger_throw', 'RELEASE'), ('burger_flying', 'TUMBLE'),
+              ('burger_blast', 'EXPLOSION'), ('burger_smoke', 'SMOKE & FRAGMENTS'), ('burger_pickup', 'PICKUP')]
+    board = Image.new('RGB', (1000, 912), '#181c20')
+    pen = ImageDraw.Draw(board)
+    for i, (name, label) in enumerate(stages):
+        x, y = 10 + (i % 2) * 500, 28 + (i // 2) * 304
+        board.paste(Image.open(out / (name + '.png')).resize((480,270),Image.Resampling.NEAREST),(x,y))
+        pen.text((x,y-18),label,fill='#e6cf9c')
+    board.save(out / 'burger-preview.png')
+    frames = [Image.open(out / f'burger_anim_{i:03d}.ppm').resize((720,405),Image.Resampling.NEAREST) for i in range(105)]
+    frames[0].save(out / 'burger-action.gif', save_all=True, append_images=frames[1:], duration=33, loop=0)
     print(out / 'contact-sheet.png')
 
 

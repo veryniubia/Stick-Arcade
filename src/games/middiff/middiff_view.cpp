@@ -801,6 +801,117 @@ void drawCrosshair(const G::Player& me, bool scoped) {
     }
 }
 
+// Small, stepped pixel silhouette shared by the pickup, hand and tumbling projectile.
+// Palette: outline, toasted bun, bun light, sesame, lettuce, tomato, cheese, beef.
+void burgerIcon(int x, int y, int r, bool armed, float angle = 0) {
+    static const char* rows[] = {
+        "........ooooooo.........",
+        "......oobbbbbbbboo......",
+        "....oobbblllllbbboo.....",
+        "...obblsslllsllbbbbo....",
+        "..obllllllsllllllbbbo...",
+        "..obllsllllllssllbbbo...",
+        ".oblllllllllllllllbbbo..",
+        ".obbbbbbbbbbbbbbbbbbbo..",
+        ".ooooooooooooooooooooo..",
+        "oogggggggggggggggggggoo.",
+        ".ogggoggggoggggoggggo...",
+        "..ottttttttttttttttto...",
+        ".occccccccccccccccccco..",
+        "..ommmmccmmmmccmmmmo....",
+        ".ommmmmmcmmmmmcmmmmmo...",
+        "..oooooooooooooooooo....",
+        "..oblllllllllllllbbo....",
+        "...obbbbbbbbbbbbbbo.....",
+        "....oooooooooooooo......"
+    };
+    const uint16_t colors[] = {rgb(59,38,27),rgb(183,108,44),rgb(231,170,78),rgb(255,230,161),
+        rgb(104,150,52),rgb(183,65,38),rgb(245,195,58),rgb(86,48,32)};
+    auto& c=display::canvas();
+    r=std::max(3,std::min(32,r));
+    const float scale=r/12.f, co=std::cos(angle), si=std::sin(angle);
+    const int bound=roundi(r*1.4f);
+    for (int dy=-bound;dy<=bound;++dy) for (int dx=-bound;dx<=bound;++dx) {
+        const int u=static_cast<int>(std::floor((dx*co+dy*si)/scale+12));
+        const int v=static_cast<int>(std::floor((-dx*si+dy*co)/scale+9));
+        if (v<0 || v>=19 || u<0 || u>=24) continue;
+        const char pixel=rows[v][u];
+        int col=-1;
+        switch(pixel) {case 'o':col=0;break;case 'b':col=1;break;case 'l':col=2;break;case 's':col=3;break;
+            case 'g':col=4;break;case 't':col=5;break;case 'c':col=6;break;case 'm':col=7;break;}
+        if(col>=0)c.drawPixel(x+dx,y+dy,colors[col]);
+    }
+    if (armed && angle==0) {
+        // A tiny metal lever and pin, tucked beside the bun rather than a giant ring.
+        c.fillRect(x+r/2,y-r*3/4-2,5,2,ink);
+        c.drawRect(x+r/2+3,y-r*3/4-5,4,4,rgb(171,176,163));
+    }
+}
+
+void burgerHand(int x, int y, int team, bool open) {
+    auto& c=display::canvas();
+    c.fillRect(x-5,y+7,18,27,ink);
+    c.fillRect(x-3,y+9,14,25,teamDark[team]);
+    c.fillRect(x-6,y+5,18,6,rgb(59,62,47)); // glove cuff
+    c.fillRect(x-8,y-2,19,10,rgb(129,91,58));
+    c.fillRect(x-7,y-3,16,8,rgb(193,143,91));
+    c.fillRect(x-6,y-3,12,2,rgb(223,174,115));
+    if (open) {
+        for(int i=0;i<4;++i)c.fillRect(x-9+i*5,y-9+(i%2),3,9,rgb(203,153,99));
+    } else {
+        c.fillRect(x-11,y-6,5,9,rgb(102,70,45));
+        c.fillRect(x-10,y-6,4,7,rgb(219,164,107));
+    }
+}
+
+void drawBurger(const Cam& cam, const G& g, uint32_t ms) {
+    const auto& b=g.burger;
+    if (!g.segmentClear(cam.x,cam.y,cam.z,b.x,b.y,b.z)) return;
+    float x,y,d;
+    if (!project(cam,b.x,b.y,b.z,x,y,d)) return;
+    auto& c=display::canvas();
+    if (b.state==G::BurgerState::Blast) {
+        const float age=.45f-b.timer, progress=std::max(0.f,age/.45f);
+        const float size=std::min(70.f,g_focal*G::kBlastRadius/d);
+        // Expanding, irregular flash: short bright centre, then dusty smoke and food fragments.
+        if(age<.20f) {
+            const float r=size*(.3f+progress);
+            for(int i=0;i<10;++i) {
+                const float a=i*kPi/5;
+                const float reach=r*(i%2?.9f:1.25f);
+                c.fillTriangle(roundi(x+std::cos(a)*reach),roundi(y+std::sin(a)*reach),
+                    roundi(x+std::cos(a+.4f)*r*.35f),roundi(y+std::sin(a+.4f)*r*.35f),
+                    roundi(x+std::cos(a-.4f)*r*.35f),roundi(y+std::sin(a-.4f)*r*.35f),rgb(223,117,42));
+            }
+            c.fillCircle(roundi(x),roundi(y),std::max(2,roundi(r*.36f)),gold);
+            c.fillCircle(roundi(x)-1,roundi(y)-1,std::max(1,roundi(r*.18f)),rgb(255,239,186));
+        }
+        for(int i=0;i<12;++i) {
+            const float a=i*2.39996f;
+            const float spread=size*(.25f+progress*.8f)*(i%3==0?.65f:1.f);
+            const int px=roundi(x+std::cos(a)*spread),py=roundi(y+std::sin(a)*spread-progress*size*.25f);
+            const int r=std::max(2,roundi(size*(.06f+progress*.09f)));
+            const uint16_t smoke=i%2?rgb(159,133,99):rgb(188,161,116);
+            c.fillRect(px-r,py-r/2,r*2+1,r+1,smoke);
+            c.fillRect(px-r/2,py-r,r+1,r*2+1,smoke);
+            const int fx=roundi(x+std::cos(a)*spread*1.3f),fy=roundi(y+std::sin(a)*spread*1.3f+progress*progress*size*.4f);
+            const uint16_t crumb=i%3==0?rgb(108,143,48):i%3==1?gold:rgb(187,70,35);
+            c.fillRect(fx,fy,3,i%2?2:3,crumb);
+        }
+    } else {
+        const bool flying=b.state==G::BurgerState::Flying;
+        const int r=std::max(3,roundi(g_focal*(flying?G::kGrenadeRadius:G::kBurgerRadius)/d));
+        const float angle=flying?(G::kBurgerFuse-b.timer)*12.f:0;
+        burgerIcon(roundi(x),roundi(y),r,false,angle);
+        if (flying && (ms/90)%2) c.fillRect(roundi(x)+r/2,roundi(y)-r,2,2,rgb(255,99,45));
+        if (!flying) { // Two quiet glints distinguish the collectible from scenery.
+            const int drift=(ms/250)%2;
+            c.drawFastHLine(roundi(x)-r-4,roundi(y)-2+drift,3,gold);
+            c.drawFastVLine(roundi(x)-r-3,roundi(y)-3+drift,3,gold);
+        }
+    }
+}
+
 struct Item { float dist; int index; };  // index < kBoxCount: a box; kBoxCount: the opponent
 
 float boxDistance(const Cam& cam, const G::Box& b) {
@@ -819,7 +930,9 @@ void MidDiffGame::draw(int local, const arcade::DrawCtx& ctx) {
                    ? static_cast<uint16_t*>(c.getBuffer()) : nullptr;
 #endif
     const Player& me = players[local];
-    const bool scoped = ctx.scoped && me.dead <= 0;
+    const float throwAge = burger.state==BurgerState::Flying && burger.owner==local ? kBurgerFuse-burger.timer : 10.f;
+    const bool throwing = throwAge < .30f;
+    const bool scoped = ctx.scoped && me.dead <= 0 && !holdingBurger(local) && !throwing;
     g_focal = scoped ? 380.f : 190.f;
     const int foeIndex = 1 - local;
     const int myTeam = team(local);
@@ -834,7 +947,7 @@ void MidDiffGame::draw(int local, const arcade::DrawCtx& ctx) {
     floorAndWalls(cam, ctx.nowMs);
 
     // Everything solid and the opponent, back to front.
-    Item items[kBoxCount + 1];
+    Item items[kBoxCount + 2];
     int count = 0;
     for (int i = 0; i < kBoxCount; ++i) items[count++] = {boxDistance(cam, boxes[i]), i};
     {
@@ -842,9 +955,14 @@ void MidDiffGame::draw(int local, const arcade::DrawCtx& ctx) {
         const float dx = foe.x - cam.x, dz = foe.z - cam.z;
         items[count++] = {dx * dx + dz * dz, kBoxCount};
     }
+    if (burger.state==BurgerState::Pickup || burger.state==BurgerState::Flying || burger.state==BurgerState::Blast) {
+        const float dx=burger.x-cam.x,dz=burger.z-cam.z;
+        items[count++]={dx*dx+dz*dz,kBoxCount+1};
+    }
     std::sort(items, items + count, [](const Item& a, const Item& b) { return a.dist > b.dist; });
     for (int k = 0; k < count; ++k) {
         const int i = items[k].index;
+        if (i == kBoxCount+1) { drawBurger(cam,*this,ctx.nowMs); continue; }
         if (i == kBoxCount) { drawFigure(cam, *this, foeIndex, ctx.nowMs); continue; }
         const Box& b = boxes[i];
         if (b.kind == Kind::Gate) drawGate(cam, *this, ctx.nowMs);
@@ -871,7 +989,17 @@ void MidDiffGame::draw(int local, const arcade::DrawCtx& ctx) {
         static float lastX[2], lastZ[2];
         moving = std::fabs(me.x - lastX[local]) + std::fabs(me.z - lastZ[local]) > 0.012f;
         lastX[local] = me.x; lastZ[local] = me.z;
-        if (!scoped) drawGun(me, ctx.nowMs, moving);
+        if (holdingBurger(local)) {
+            const int bob=roundi(std::sin(ctx.nowMs*(moving?.014f:.004f))*(moving?2.f:1.f));
+            burgerHand(202,117+bob,myTeam,false);
+            burgerIcon(199,108+bob,14,true);
+            ui::shadowText("A: THROW",196,87,1,gold);
+        } else if (throwing) {
+            const float t=throwAge/.30f;
+            const int x=roundi(201-29*std::sin(t*kPi));
+            const int y=roundi(115-12*std::sin(t*kPi)+t*t*30);
+            burgerHand(x,y,myTeam,true);
+        } else if (!scoped) drawGun(me, ctx.nowMs, moving);
         drawCrosshair(me, scoped);
     }
 
@@ -963,6 +1091,10 @@ void MidDiffGame::sfx(uint32_t ev) {
     else if (ev & iWasHit) sound::play(hurt, 2, 4, delay);
     else if (ev & theyDied) sound::play(head, 3, 4, delay);
     else if (ev & theyWereHit) sound::play(ping, 2, 3, delay);
+    else if (ev & BurgerBoom) sound::play(hurt, 2, 4);
+    else if (ev & BurgerGet) sound::play(head, 3, 3);
+    else if (ev & BurgerThrow) sound::play(gate, 4, 2);
+    else if (ev & BurgerTick) sound::play(ping, 1, 1);
     else if (ev & GateMove) sound::play(gate, 4, 1);
 }
 

@@ -45,11 +45,25 @@ public:
     static constexpr float kGateMoveTime = 0.9f, kGateWarn = 0.6f;
     static constexpr float kGateClosedMin = 2.5f, kGateClosedMax = 7.0f, kGateOpenMin = 2.0f, kGateOpenMax = 5.0f;
 
+    static constexpr float kBurgerWaitMin = 8.0f, kBurgerWaitMax = 15.0f;
+    static constexpr float kBurgerFuse = 2.0f, kBlastRadius = 2.0f;
+    static constexpr float kBurgerRadius = 0.26f, kGrenadeRadius = 0.15f;
+    static constexpr float kThrowSpeed = 18.0f, kGravity = 9.8f;
+    enum class BurgerState : uint8_t { Waiting, Pickup, Held, Flying, Blast };
+    struct Burger {
+        BurgerState state = BurgerState::Waiting;
+        uint8_t owner = 0;
+        float timer = 8, x = 0, y = 0, z = 0;
+        float vx = 0, vy = 0, vz = 0; // host physics only
+    } burger;
+    bool holdingBurger(int i) const { return burger.state == BurgerState::Held && burger.owner == i; }
+
     enum Event : uint32_t {
         ShotP0 = 1, ShotP1 = 2,    // a shot was fired
         HurtP0 = 4, HurtP1 = 8,    // that player took damage
         DieP0 = 16, DieP1 = 32,    // that player died (with phase MatchEnd it was the last point)
         Headshot = 64,             // accompanies HurtP0/HurtP1
+        BurgerGet = 256, BurgerThrow = 512, BurgerBoom = 1024, BurgerTick = 2048,
         GateMove = 128,            // the gate is about to move
     };
 
@@ -146,6 +160,8 @@ private:
     void respawn(int);
     void updateLife(int, float);
     uint32_t updateGate(float);
+    uint32_t updateBurger(float);
+    void throwBurger(int);
     bool act(int, const PadInput&, float);
     void moveBy(int, float, float);
     uint32_t resolveShots(const bool fired[2]);
