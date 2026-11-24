@@ -17,37 +17,41 @@ static void gyroLook() {
         for (int i = 0; i < frames; ++i) l.update(ax, ay, az, gx, gy, gz, tick);
     };
     GyroLook l;
-    l.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
     l.reset();
     // Holding still: no drift, even with a small constant bias that the estimator absorbs.
     turn(l, 1, 0, 0, 0.8f, -0.6f, 0.5f, 240);
     CHECK(std::fabs(l.yaw()) < 1.0f && std::fabs(l.pitch()) < 1.0f && l.settled());
     // Turning about the vertical axis (here +X is up) turns the view by the gain; clockwise seen from above is right.
     l.recenter();
-    turn(l, 1, 0, 0, -10, 0, 0, 60);  // 10 deg/s for 1 s
-    CHECK(std::fabs(l.yaw() - 30.0f * GyroLook::kYawSign) < 3.0f);
+    turn(l, 1, 0, 0, -9.2f, -0.6f, 0.5f, 60);  // 10 deg/s plus the same sensor offset
+    CHECK(std::fabs(l.yaw() - (70.0f / 3) * GyroLook::kYawSign) < 0.1f);
     // The same turn gives the same yaw however the device is tilted: gravity is the reference.
     GyroLook t;
-    t.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
     t.reset();
     turn(t, 0, 0, 1, 0, 0, 0, 120);
     t.recenter();
     turn(t, 0, 0, 1, 0, 0, -10, 60);
     CHECK(std::fabs(t.yaw() - l.yaw()) < 3.0f);
-    // The view is limited, and returns as soon as the device does: no wind-up.
+    // Overshooting either stop must preserve the calibrated centre, even at different return speeds.
     GyroLook c;
-    c.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
     c.reset();
     turn(c, 1, 0, 0, 0, 0, 0, 120);
-    turn(c, 1, 0, 0, -40, 0, 0, 120);  // 80 deg of device turn, far beyond the 30 that reach the limit
-    CHECK(c.yaw() == 90.0f * GyroLook::kYawSign || c.yaw() == -90.0f * GyroLook::kYawSign);
-    const float limit = c.yaw();
-    turn(c, 1, 0, 0, 40, 0, 0, 20);  // 13 deg back
-    CHECK(std::fabs(c.yaw()) < std::fabs(limit) - 20.0f);
+    for (int side = -1; side <= 1; side += 2) {
+        turn(c, 1, 0, 0, -15 * side, 0, 0, 60);
+        CHECK(std::fabs(c.yaw() - 35 * side) < .01f);
+        turn(c, 1, 0, 0, -15 * side, 0, 0, 60);
+        CHECK(std::fabs(c.yaw() - 70 * side) < .01f);
+        turn(c, 1, 0, 0, -15 * side, 0, 0, 60);
+        CHECK(c.yaw() == 70 * side);
+        turn(c, 1, 0, 0, 5 * side, 0, 0, 180);
+        CHECK(std::fabs(c.yaw() - 70 * side) < .01f);
+        turn(c, 1, 0, 0, 30 * side, 0, 0, 60);
+        CHECK(std::fabs(c.yaw()) < .01f);
+    }
     // Pitch follows the angle at which the screen faces up (gyro about the screen's right edge, tied to gravity) and
     // is limited. Raising the top edge towards the player (the screen turns to face down) looks up.
     GyroLook p;
-    p.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
+    p.configurePitch(2.0f, 2.0f);
     p.reset();
     auto tilt = [&](GyroLook& g, float from, float to, int frames) {
         for (int i = 1; i <= frames; ++i) {
@@ -69,33 +73,50 @@ static void gyroLook() {
     CHECK(p.yaw() == 0 && p.pitch() == 0);
     // A gyro that reports a steady turn the device is not making cannot walk the view away: gravity holds it.
     GyroLook d;
-    d.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
+    d.configurePitch(2.0f, 2.0f);
     d.reset();
     turn(d, 1, 0, 0, 0, 0, 0, 120);
     turn(d, 1, 0, 0, 0, 2.5f, 0, 1200);  // 20 s of 2.5 deg/s bias on the pitch axis
     CHECK(std::fabs(d.pitch()) < 3.0f);
+    // Stationary offset above the legacy automatic bias threshold; a jolt leaves progress intact.
+    GyroLook calibrated;
+    calibrated.beginCalibration();
+    turn(calibrated, 1, 0, 0, 6, 0, 0, 30);
+    CHECK(calibrated.calibrationProgress() > .45f);
+    turn(calibrated, 1, 0, 0, 65, 0, 0, 1);
+    CHECK(calibrated.calibrationProgress() > .5f);
+    turn(calibrated, 1, 0, 0, 6, 0, 0, 65);
+    CHECK(calibrated.calibrationProgress() == 1 && calibrated.settled());
+    turn(calibrated, 1, 0, 0, 6, 0, 0, 1800);
+    CHECK(std::fabs(calibrated.yaw()) < .05f);
+    // A post-calibration bias change used to accumulate into a leftward turn.
+    turn(calibrated, 1, 0, 0, 7, 0, 0, 1800);
+    CHECK(calibrated.yaw() == 0);
+    turn(calibrated, 1, 0, 0, -8, 0, 0, 60);  // turn right 15 degrees
+    const float held = calibrated.yaw();
+    CHECK(std::fabs(held - 35) < .01f);
+    turn(calibrated, 1, 0, 0, 6, 0, 0, 1800);  // another bias change off-centre
+    CHECK(calibrated.yaw() == held);
+    turn(calibrated, 1, 0, 0, 11, 0, 0, 180);  // turn back at 5 deg/s
+    CHECK(std::fabs(calibrated.yaw()) < .01f);
+    // Natural tremor repeatedly crosses the old per-frame rejection thresholds.
+    GyroLook handheld;
+    handheld.beginCalibration();
+    for (int i = 0; i < 65; ++i) {
+        const float wobble = std::sin(i * .9f);
+        handheld.update(1, .05f * wobble, .03f * wobble, 6 + 8 * wobble, 9 * wobble, 0, tick);
+    }
+    CHECK(handheld.calibrationProgress() == 1);
+    turn(handheld, 1, 0, 0, 6, -12, 0, 120);
+    const float level = handheld.pitch();
+    turn(handheld, 1, 0, 0, 6, -12, 0, 3600);
+    CHECK(std::fabs(level) < 1 && std::fabs(handheld.pitch() - level) < .01f);
     // Absurd time steps are ignored.
     GyroLook s;
-    s.configure(3.0f, 3.0f, 2.0f, 2.0f, 90, 30);
     s.reset();
     s.update(1, 0, 0, 500, 500, 500, 5.0f);
     s.update(1, 0, 0, 500, 500, 500, 0.0f);
     CHECK(s.yaw() == 0 && s.pitch() == 0);
-    // A gain that grows with the view angle is fine near the centre and quick towards the limit, and a turn
-    // there and back always returns to the same view.
-    GyroLook v;
-    v.configure(1.0f, 5.0f, 1.0f, 3.0f, 90, 30);
-    v.reset();
-    turn(v, 1, 0, 0, 0, 0, 0, 120);
-    turn(v, 1, 0, 0, -10, 0, 0, 30);  // 5 deg of device turn
-    CHECK(std::fabs(v.yaw()) > 3.0f && std::fabs(v.yaw()) < 8.0f);
-    v.recenter();
-    int frames = 0;
-    while (std::fabs(v.yaw()) < 90.0f && frames < 600) { v.update(1, 0, 0, -20, 0, 0, tick); ++frames; }
-    const float travelled = 19.6f * frames * tick;  // deg/s after the dead zone times seconds
-    CHECK(travelled > 30.0f && travelled < 45.0f);
-    for (int i = 0; i < frames; ++i) v.update(1, 0, 0, 20, 0, 0, tick);
-    CHECK(std::fabs(v.yaw()) < 2.0f);
 }
 
 static void stickMap() {

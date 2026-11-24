@@ -16,7 +16,8 @@ enum class Ui : uint8_t { Move, Select, Denied, Refresh, Win };
 void begin();
 void update();  // call every loop; plays queued notes
 
-void play(const Note* notes, int count, uint8_t priority);
+void play(const Note* notes, int count, uint8_t priority, uint16_t delayMs = 0);
+void playSample(const uint8_t* pcm, unsigned length, unsigned rate, bool distant);
 void playUi(Ui sfx);
 
 void setVolume(uint8_t speakerVolume);  // 0 mutes

@@ -47,26 +47,20 @@ void begin() {
 void update() {
     const bool bPressed = M5.BtnB.wasPressed();
     if (M5.BtnA.wasPressed()) ++g_aCount;
-    if (bPressed) {
-        ++g_bCount;
-        // Games that use the gyro view treat B as "this is straight ahead".
-        if (g_lookOn) g_look.recenter();
-    }
+    if (bPressed) ++g_bCount;
     joystick::update();
     if (!g_imuOk) return;
-    M5.Imu.update();
-    float ax = 0, ay = 0, az = 0;
-    if (!M5.Imu.getAccel(&ax, &ay, &az)) return;
-
-    if (g_lookOn) {
-        float gx = 0, gy = 0, gz = 0;
-        const uint32_t nowUs = micros();
-        if (M5.Imu.getGyro(&gx, &gy, &gz)) {
-            g_look.update(ax, ay, az, gx, gy, gz, (nowUs - g_lookUs) * 1e-6f);
-        }
-        g_lookUs = nowUs;
+    const auto fresh = M5.Imu.update();
+    if (!fresh) return;
+    const auto& sample = M5.Imu.getImuData();
+    const float ax = sample.accel.x, ay = sample.accel.y, az = sample.accel.z;
+    if (g_lookOn && (fresh & m5::IMU_Class::sensor_mask_gyro)) {
+        g_look.update(ax, ay, az, sample.gyro.x, sample.gyro.y, sample.gyro.z,
+                      (sample.usec - g_lookUs) * 1e-6f);
+        g_lookUs = sample.usec;
     }
 
+    if (!(fresh & m5::IMU_Class::sensor_mask_accel)) return;
     const float magnitude = sqrtf(ax * ax + ay * ay + az * az);
     if (g_shake.update(millis(), fabsf(magnitude - 1.0f))) {
         g_shaken = true;
@@ -113,16 +107,16 @@ bool shaken() {
     return s;
 }
 
-void beginLook(float yawGainCenter, float yawGainEdge, float pitchGainCenter, float pitchGainEdge,
-               float yawLimit, float pitchLimit) {
+void beginLook(float pitchGainCenter, float pitchGainEdge) {
     g_look.reset();
-    g_look.configure(yawGainCenter, yawGainEdge, pitchGainCenter, pitchGainEdge, yawLimit, pitchLimit);
+    g_look.configurePitch(pitchGainCenter, pitchGainEdge);
     g_lookUs = micros();
     g_lookOn = true;
 }
 
+void calibrateLook() { g_look.beginCalibration(); }
+float calibrationProgress() { return g_look.calibrationProgress(); }
 void endLook() { g_lookOn = false; }
-void recenterLook() { g_look.recenter(); }
 float lookYawDeg() { return g_look.yaw(); }
 float lookPitchDeg() { return g_look.pitch(); }
 

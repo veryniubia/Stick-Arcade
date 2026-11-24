@@ -12,7 +12,7 @@
 
 namespace { M5Canvas canvas; }
 namespace display { M5Canvas& canvas(){return ::canvas;} }
-namespace sound { void play(const Note*,int,uint8_t){} }
+namespace sound { void playSample(const uint8_t*,unsigned,unsigned,bool){} void play(const Note*,int,uint8_t,uint16_t){} }
 namespace ui {
 void shadowText(const char* text,int x,int y,int size,uint16_t color) {
     int start=x-int(strlen(text))*6*size/2,top=y-4*size;
@@ -54,6 +54,8 @@ int main(int argc,char** argv) {
     // Spawn view and the far view.
     place(g,0,0,8.5f);place(g,1,0,8.5f);g.draw(0,ctx);save("start");
     place(g,0,0.5f,12.5f);place(g,1,0.5f,12.5f);aimAtFoe(g,0);g.draw(0,ctx);save("far");
+    ctx.scoped=true;g.draw(0,ctx);save("scope");ctx.scoped=false;
+    g.players[0].cooldown=.6f;g.draw(0,ctx);save("bolt");
     // Behind the high cover, gate closed and open: the doorways show the other side.
     g=fresh();place(g,0,-3.0f,7.6f);place(g,1,-3.0f,7.6f);aimAtFoe(g,0);g.draw(0,ctx);save("gate_closed");
     openGate(g);aimAtFoe(g,0);g.draw(0,ctx);save("gate_open");
@@ -61,8 +63,8 @@ int main(int argc,char** argv) {
     g.gate.state=G::GateState::Opening;g.gate.pos=.5f;g.gate.timer=.45f;g.draw(0,ctx);save("gate_lifting");
     // Right doorway with the barrels, the centre arch, and looking along the walls.
     g=fresh();place(g,0,3.4f,7.4f);place(g,1,3.4f,7.4f);aimAtFoe(g,0);g.draw(0,ctx);save("barrels");
-    g=fresh();place(g,0,0,9.0f);place(g,1,0,9.0f);look(g,0,-75,2);g.draw(0,ctx);save("left");
-    look(g,0,75,2);g.draw(0,ctx);save("right");
+    g=fresh();place(g,0,0,9.0f);place(g,1,0,9.0f);look(g,0,-G::kYawLimit,2);g.draw(0,ctx);save("left");
+    look(g,0,G::kYawLimit,2);g.draw(0,ctx);save("right");
     look(g,0,0,26);g.draw(0,ctx);save("up");
     look(g,0,0,-26);g.draw(0,ctx);save("down");
     // The other team's side: its own cover layout.

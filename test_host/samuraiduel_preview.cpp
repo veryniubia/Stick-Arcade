@@ -11,7 +11,7 @@
 
 namespace { M5Canvas canvas; }
 namespace display { M5Canvas& canvas(){return ::canvas;} }
-namespace sound { void play(const Note*,int,uint8_t){} }
+namespace sound { void play(const Note*,int,uint8_t,uint16_t){} }
 namespace ui {
 void shadowText(const char* text,int x,int y,int size,uint16_t color) {
     int start=x-int(strlen(text))*6*size/2,top=y-4*size;

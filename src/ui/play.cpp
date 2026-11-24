@@ -22,6 +22,12 @@ namespace {
 
 using platform::rgb;
 
+enum class Calibration { Off, Prompt, Release, Sampling };
+Calibration g_cal = Calibration::Off;
+bool g_scoped = false, g_trackingB = false;
+uint32_t g_scopePressMs = 0;
+uint8_t g_calA = 0, g_calJump = 0;
+
 enum class Stage : uint8_t { Lobby, Solo, Online };
 
 constexpr uint32_t kClosedShowMs = 1500;
@@ -115,8 +121,6 @@ void closeExitAsk() {
     // A new press used in the dialog must also stay out of play while held.
     if (aPresses && input::aHeld()) g_aArmed = false;
     if (bPresses && input::bHeld()) g_bArmed = false;
-    // Shaking the device to ask for the exit also moved the view: start again from the centre.
-    if (g_entry->info->needsJoystick) input::recenterLook();
 }
 
 void pumpRadio(uint32_t now) {
@@ -135,7 +139,6 @@ void pumpRadio(uint32_t now) {
 void startSolo() {
     offline_trace::record("solo");
     if (g_entry->info->portrait) g_bArmed = false;
-    if (g_entry->info->needsJoystick) input::recenterLook();
     display::setPortrait(g_entry->info->portrait);
     game().begin(arcade::Mode::Solo, esp_random());
     // The B press that selected SOLO belongs to the waiting screen, as do older press counters.
@@ -150,7 +153,6 @@ void startSolo() {
 
 void enterOnline() {
     display::setPortrait(g_entry->info->portrait);
-    display::setPortrait(g_entry->info->portrait);
     g_stage = Stage::Online;
     g_lastDigit = -1;
     g_lastStatus = net::Status::Searching;
@@ -163,7 +165,7 @@ void enterOnline() {
 // Shake-to-exit confirmation. Returns true when the user confirmed.
 bool updateExitAsk(uint32_t now, bool shake, bool aPress, bool bPress) {
     if (!g_exitAsk) {
-        if (shake) openExitAsk(now);
+        if (shake && g_cal == Calibration::Off) openExitAsk(now);
         return false;
     }
     if (aPress || input::aCount() != g_frozenACount) {
@@ -208,10 +210,41 @@ void drawSoloMark() {
 void drawBox(int w, int h, int y) {
     w = std::min(w, display::width()-8);
     auto& c = display::canvas();
-    w = min(w, display::width() - 8);
     const int x = (display::width() - w) / 2;
     c.fillRoundRect(x, y, w, h, 5, rgb(24, 20, 26));
     c.drawRoundRect(x, y, w, h, 5, ui::kWhite);
+}
+
+void updateCalibration(bool bPress) {
+    switch (g_cal) {
+        case Calibration::Prompt:
+            if (bPress) g_cal = Calibration::Release;
+            break;
+        case Calibration::Release:
+            if (!input::bHeld()) {
+                input::calibrateLook();
+                g_cal = Calibration::Sampling;
+            }
+            break;
+        case Calibration::Sampling:
+            if (input::calibrationProgress() >= 1) g_cal = Calibration::Off;
+            break;
+        case Calibration::Off: break;
+    }
+}
+
+void drawCalibration() {
+    drawBox(196, 58, 39);
+    const bool sampling = g_cal == Calibration::Sampling;
+    ui::shadowText(sampling ? "CENTERING" : "FACE FORWARD", 120, 54, 2, ui::yellow());
+    ui::shadowText(sampling ? "MEASURING GYRO BIAS" :
+                   g_cal == Calibration::Release ? "RELEASE B" : "TAP B TO CENTER",
+                   120, 75, 1, ui::kWhite);
+    if (sampling) {
+        auto& c = display::canvas();
+        c.drawRect(60, 84, 120, 5, ui::kWhite);
+        c.fillRect(61, 85, static_cast<int>(118 * input::calibrationProgress()), 3, ui::green());
+    }
 }
 
 void drawExitAsk() {
@@ -292,6 +325,8 @@ void begin(const registry::GameEntry& entry) {
     g_entry = &entry;
     g_gi = arcade::gameCreate(*entry.info);
     g_stage = Stage::Lobby;
+    g_scoped = g_trackingB = false;
+    g_cal = entry.info->needsJoystick ? Calibration::Prompt : Calibration::Off;
     g_beginMs = millis();
     g_closedAtMs = 0;
     g_playingSinceMs = 0;
@@ -307,9 +342,8 @@ void begin(const registry::GameEntry& entry) {
     g_radioOk = false;
     offline_trace::record("lobby", entry.info->wireId);
     if (entry.info->needsJoystick) {
-        // Amplified view control: slow near the centre for fine aim, fast towards the limits (see core/gyro_look.h).
         const float gain = settings::aimGain();
-        input::beginLook(0.35f * gain, 1.65f * gain, 0.33f * gain, 1.0f * gain, pad::kLookYawLimit, pad::kLookPitchLimit);
+        input::beginLook(0.33f * gain, gain);
     }
     if (!g_gi.game) {
         offline_trace::record("game_alloc_fail");
@@ -359,6 +393,12 @@ bool update(float dt) {
     li.pad = makePad();
 
     if (g_stage == Stage::Lobby) {
+        // Calibrate before advertising or accepting a peer. Both devices reach the
+        // existing matchmaking handshake only after their local pose is ready.
+        if (g_cal != Calibration::Off) {
+            updateCalibration(bPress);
+            return aPress;
+        }
         pumpRadio(now);
         if (g_radioOk) {
             g_session.update(now, li);
@@ -383,8 +423,42 @@ bool update(float dt) {
         if (g_stage == Stage::Online) g_session.leave();
         return true;
     }
+    bool blockControls = g_cal != Calibration::Off;
+    if (g_entry->info->needsJoystick) {
+        const bool playing = g_stage == Stage::Solo || g_session.status() == net::Status::Playing;
+        if (blockControls) {
+            updateCalibration(false);
+        } else if (!playing || g_exitAsk || askWasOpen || game().phase() != arcade::MatchPhase::Playing) {
+            g_trackingB = false;
+        } else if (bPress) {
+            g_trackingB = true;
+            g_scopePressMs = now;
+        } else if (g_trackingB && now - g_scopePressMs >= 650) {
+            g_trackingB = false;
+            g_scoped = false;
+            g_cal = Calibration::Release;
+            // Suppress actions on the frame that crosses the hold threshold as well.
+            g_calA = input::aCount() - uint8_t(input::aPressed());
+            g_calJump = joystick::pressCount();
+            blockControls = true;
+        } else if (g_trackingB && !input::bHeld()) {
+            g_trackingB = false;
+            g_scoped = !g_scoped;
+        }
+    }
     pumpRadio(now);
     li.pad = makePad();
+    if (blockControls) {
+        // Consume presses during calibration, including the completion frame.
+        g_aSkip += uint8_t(input::aCount() - g_calA);
+        g_jumpSkip += uint8_t(joystick::pressCount() - g_calJump);
+        g_calA = input::aCount();
+        g_calJump = joystick::pressCount();
+        li.pad = makePad();
+        li.pad.stickX = li.pad.stickY = 0;
+        li.pad.a = li.pad.b = false;
+        aPress = false;
+    }
     li.again = aPress;
 
     if (g_stage == Stage::Solo) {
@@ -426,7 +500,7 @@ bool update(float dt) {
     if (st == net::Status::Playing && g_lastStatus != net::Status::Playing && g_lastStatus != net::Status::LinkLost) {
         g_playingSinceMs = now;
         sound::playUi(sound::Ui::Refresh);
-        if (g_entry->info->needsJoystick) input::recenterLook();
+        g_scoped = false;
     }
     if (st != g_lastStatus) {
         offline_trace::record("online_status", static_cast<int>(st), static_cast<int>(g_session.role()));
@@ -448,8 +522,13 @@ void draw() {
     const uint32_t now = millis();
     arcade::DrawCtx ctx;
     ctx.nowMs = now;
+    ctx.scoped = g_scoped;
     if (g_stage == Stage::Lobby) {
-        drawLobby();
+        if (g_cal != Calibration::Off) {
+            g_entry->drawLobby(now);
+            drawCalibration();
+            if (g_stickLostMs) ui::shadowText("JOYSTICK LOST", 120, 110, 1, ui::red());
+        } else drawLobby();
         return;
     }
     if (g_stage == Stage::Solo) {
@@ -460,6 +539,7 @@ void draw() {
         game().draw(g_session.localIndex(), ctx);
         drawOnlineOverlays(now);
     }
+    if (g_cal != Calibration::Off) drawCalibration();
     if (g_exitAsk) drawExitAsk();
     if (g_stickLostMs != 0) {
         const int cx = display::width() / 2;

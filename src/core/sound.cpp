@@ -36,7 +36,7 @@ void update() {
     g_nextAt = millis() + n.ms;
 }
 
-void play(const Note* notes, int count, uint8_t priority) {
+void play(const Note* notes, int count, uint8_t priority, uint16_t delayMs) {
     if (g_volume == 0) return;
     const uint32_t now = millis();
     if (now < g_busyUntil && priority < g_prio) return;  // a more important sound is still playing
@@ -48,8 +48,15 @@ void play(const Note* notes, int count, uint8_t priority) {
         total += notes[i].ms;
     }
     g_prio = priority;
-    g_busyUntil = now + total;
-    g_nextAt = 0;
+    g_busyUntil = now + delayMs + total;
+    g_nextAt = now + delayMs;
+}
+
+void playSample(const uint8_t* pcm, unsigned length, unsigned rate, bool distant) {
+    if (!g_volume) return;
+    const int channel = distant ? 2 : 1;
+    M5.Speaker.setChannelVolume(channel, distant ? 100 : 220);
+    M5.Speaker.playRaw(pcm, length, rate, false, 1, channel, true);
 }
 
 void playUi(Ui sfx) {

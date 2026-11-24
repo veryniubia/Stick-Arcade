@@ -33,7 +33,8 @@ constexpr uint16_t teamColor[2] = {rgb(228, 104, 64), rgb(78, 150, 245)};
 constexpr uint16_t teamDark[2] = {rgb(132, 58, 40), rgb(40, 70, 138)};
 constexpr uint16_t teamHead[2] = {rgb(44, 36, 36), rgb(58, 98, 176)};
 
-constexpr float kFocal = 190.f, kCx = 120.f, kCy = 67.5f, kNear = 0.3f, kDeg = 0.017453292f, kPi = 3.14159265f;
+float g_focal = 190.f;  // projection scale for the current frame
+constexpr float kCx = 120.f, kCy = 67.5f, kNear = 0.3f, kDeg = 0.017453292f, kPi = 3.14159265f;
 
 int g_viewLocal = 0;
 
@@ -64,7 +65,7 @@ V3 toCam(const Cam& c, float wx, float wy, float wz) {
 }
 V3 toCam(const Cam& c, const P3& p) { return toCam(c, p.x, p.y, p.z); }
 
-float horizonY(const Cam& c) { return kCy + kFocal * c.sp / c.cp; }
+float horizonY(const Cam& c) { return kCy + g_focal * c.sp / c.cp; }
 float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 int roundi(float v) { return static_cast<int>(lroundf(v)); }
 
@@ -178,7 +179,7 @@ void poly(const V3* in, int n, uint16_t color) {
     P2 p[32], q[32];
     float lo = 1e9f, hi = -1e9f, left = 1e9f, right = -1e9f;
     for (int i = 0; i < m; ++i) {
-        const float k = kFocal / buf[i].z;  // one division per vertex
+        const float k = g_focal / buf[i].z;  // one division per vertex
         p[i].x = kCx + k * buf[i].x;
         p[i].y = kCy - k * buf[i].y;
         lo = std::min(lo, p[i].y); hi = std::max(hi, p[i].y);
@@ -232,8 +233,8 @@ void lineC(V3 a, V3 b, uint16_t color) {
     if (a.z < kNear && b.z < kNear) return;
     if (a.z < kNear) { const float t = (kNear - a.z) / (b.z - a.z); a.x += (b.x - a.x) * t; a.y += (b.y - a.y) * t; a.z = kNear; }
     if (b.z < kNear) { const float t = (kNear - b.z) / (a.z - b.z); b.x += (a.x - b.x) * t; b.y += (a.y - b.y) * t; b.z = kNear; }
-    const float x0 = kCx + kFocal * a.x / a.z, y0 = kCy - kFocal * a.y / a.z;
-    const float x1 = kCx + kFocal * b.x / b.z, y1 = kCy - kFocal * b.y / b.z;
+    const float x0 = kCx + g_focal * a.x / a.z, y0 = kCy - g_focal * a.y / a.z;
+    const float x1 = kCx + g_focal * b.x / b.z, y1 = kCy - g_focal * b.y / b.z;
     const float dx = x1 - x0, dy = y1 - y0;
     float t0 = 0, t1 = 1;
     const float pp[4] = {-dx, dx, -dy, dy}, qq[4] = {x0, 239.99f - x0, y0, 134.99f - y0};
@@ -251,8 +252,8 @@ void lineW(const Cam& cam, P3 a, P3 b, uint16_t color) { lineC(toCam(cam, a), to
 bool project(const Cam& cam, float wx, float wy, float wz, float& sx, float& sy, float& depth) {
     const V3 v = toCam(cam, wx, wy, wz);
     if (v.z < kNear) return false;
-    sx = kCx + kFocal * v.x / v.z;
-    sy = kCy - kFocal * v.y / v.z;
+    sx = kCx + g_focal * v.x / v.z;
+    sy = kCy - g_focal * v.y / v.z;
     depth = v.z;
     return true;
 }
@@ -270,8 +271,8 @@ bool skyPoint(const Cam& cam, float az, float elev, float& sx, float& sy) {
     const float viewAz = std::atan2(cam.syaw * cam.f, cam.cyaw * cam.f);
     const float d = wrapPi(az - viewAz);
     if (std::fabs(d) > 1.2f) return false;
-    sx = kCx + kFocal * std::tan(d);
-    sy = horizonY(cam) - kFocal * std::tan(elev) / std::cos(d);
+    sx = kCx + g_focal * std::tan(d);
+    sy = horizonY(cam) - g_focal * std::tan(elev) / std::cos(d);
     return true;
 }
 
@@ -439,7 +440,7 @@ void drawGate(const Cam& cam, const G& g, uint32_t ms) {
     float sx, sy, depth;
     if (project(cam, (b.x0 + b.x1) * 0.5f, 3.45f, lz, sx, sy, depth)) {
         const bool on = warn ? (ms / 90) % 2 == 0 : moving;
-        const int r = std::max(2, roundi(0.16f * kFocal / depth));
+        const int r = std::max(2, roundi(0.16f * g_focal / depth));
         auto& c = display::canvas();
         c.fillCircle(roundi(sx), roundi(sy), r + 1, ink);
         c.fillCircle(roundi(sx), roundi(sy), r, on ? rgb(255, 170, 40) : rgb(120, 44, 34));
@@ -558,12 +559,12 @@ void drawFigure(const Cam& cam, const G& g, int idx, uint32_t ms) {
     const int team = g.team(idx);
     const V3 foot = toCam(cam, p.x, 0, p.z);
     if (foot.z < 0.8f) return;
-    const float s = kFocal / foot.z;
-    const float sx0 = kCx + kFocal * foot.x / foot.z;
+    const float s = g_focal / foot.z;
+    const float sx0 = kCx + g_focal * foot.x / foot.z;
     const float lift = G::jumpHeight(p);
     auto yAt = [&](float y) {
         const V3 v = toCam(cam, p.x, y + lift, p.z);
-        return kCy - kFocal * v.y / v.z;
+        return kCy - g_focal * v.y / v.z;
     };
     auto& c = display::canvas();
 
@@ -661,6 +662,7 @@ void drawFigure(const Cam& cam, const G& g, int idx, uint32_t ms) {
     for (int t = 0; t < thick; ++t) {
         c.drawLine(bx, by + t, tx, ty + t, ink);
     }
+    c.drawLine(bx, by + thick, (bx + tx) / 2, (by + ty) / 2 + thick, rgb(109, 129, 66));
     if (detail) {
         c.drawLine(bx, by - 1, tx, ty - 1, rgb(96, 100, 112));
         c.fillRect(X(baseX - 0.12f), Y(baseY + 0.14f), std::max(1, X(baseX + 0.1f) - X(baseX - 0.12f)), std::max(1, roundi(0.06f * s)), ink);  // scope
@@ -680,79 +682,106 @@ void drawFigure(const Cam& cam, const G& g, int idx, uint32_t ms) {
 
 // ---- first person ----
 
-// A bolt-action sniper rifle held across the bottom right: long barrel with a muzzle brake, a big scope, wooden stock,
-// the bolt handle that works after every shot, and both gloved hands. It kicks back when fired and dips when you hop.
+// Hand-pixelled at 2x scale. Each row is a palette-indexed silhouette; spaces show the world.
 void drawGun(const G::Player& me, uint32_t ms, bool moving) {
-    auto& c = display::canvas();
-    const float kick = std::min(1.0f, me.flash / 0.12f);
-    const int bob = moving ? roundi(std::sin(ms * 0.012f) * 1.5f) : 0;
-    const int dy = roundi(kick * 7) + (me.jumpT > 0 ? 6 : 0) + bob;
-    const int dx = roundi(kick * 4);
-    // Laid out for a 240x135 corner, then scaled towards the bottom right so the view stays open.
-    const float S = 0.7f;
-    auto X = [&](float x) { return roundi(240 + (x - 240) * S) + dx; };
-    auto Y = [&](float y) { return roundi(135 + (y - 135) * S) + dy; };
-    auto q = [&](uint16_t col, int ax, int ay, int bx, int by, int cx, int cy, int ex, int ey) {
-        const P2 pts[4] = {{float(X(ax)), float(Y(ay))}, {float(X(bx)), float(Y(by))},
-                           {float(X(cx)), float(Y(cy))}, {float(X(ex)), float(Y(ey))}};
-        fillPolyConvex(pts, 4, col);
+    static const char* const art[] = {
+        "",
+        "",
+        "                  ....",
+        "  .              .aaaa.      .",
+        "...a..          ..abbba.     ....",
+        ".aabba..        ..aaaaa..   .....",
+        " ...abbba..      .aaaaaabb..  ...",
+        " .....aabbb...   .aaaaaaaabbb....",
+        "   ......aabbb......aaaaaaaaabbb......",
+        "      ......aabbb.........aaaaaabb........",
+        "        ......aaabb..........aaaaaaaa......",
+        "           ......aaaa...........aaaa...ghg..",
+        "             ..d...aaaaa..............ghggg..",
+        "              .cddd...a....... ......ahgggg..",
+        "              ..cdddddd.......... ...aggggg..",
+        "               .ccccddddd.............aggg...",
+        "               ....ccccddddd.d.........aa...    .",
+        "                 ....b..cccdddddd...............d...",
+        "                   ...bbbcccccddddddd.....dddddddddd....",
+        "                     .bbbb..cccecddddd.ddddddddddedddddd....",
+        "                     ..bbb.....ceeeccccccccdddeeeeeeeeeec...",
+        "                     .....b.....ceeeeeeeeeeeeee.eeeeeeeec...",
+        "                      ...........ceeeeeeeeeee...ff..eeeec...",
+        "                      .............eeeeeeee...ff...cccccc...",
+        "                       ...... ........cccccec......cccccc...",
+        "                        ...... ...........cccc....cccccc....",
+        "                         ...    .............ccccccccccc....",
+        "                          .         .   .......ccccccccc....",
+        "                                           .......cccccc....",
+        "                                              ......c.......",
+        "                                                 ...........",
     };
-    auto ln = [&](int x0, int y0, int x1, int y1, uint16_t col) { c.drawLine(X(x0), Y(y0), X(x1), Y(y1), col); };
-    auto ci = [&](int x, int y, int r, uint16_t col) { c.fillCircle(X(x), Y(y), std::max(1, roundi(r * S)), col); };
-    const uint16_t metal = rgb(58, 62, 72), metalLight = rgb(122, 128, 144), metalDark = rgb(34, 36, 44);
-    const uint16_t wood = rgb(132, 92, 58), woodDark = rgb(88, 58, 38), woodLight = rgb(168, 122, 80);
-    const uint16_t glove = rgb(72, 66, 60), gloveLight = rgb(108, 98, 86);
-
-    q(woodDark, 194, 140, 244, 140, 244, 100, 214, 108);
-    q(wood, 202, 140, 244, 140, 244, 106, 218, 113);
-    q(woodLight, 214, 108, 244, 100, 244, 103, 217, 111);
-    q(metalDark, 176, 113, 214, 103, 226, 118, 190, 130);
-    q(metal, 178, 113, 213, 104, 222, 117, 190, 127);
-    q(metalLight, 180, 113, 212, 105, 213, 108, 182, 116);
-    // Barrel with a slotted muzzle brake.
-    q(metalDark, 184, 109, 124, 80, 122, 88, 182, 117);
-    q(metal, 183, 110, 126, 82, 125, 87, 181, 115);
-    ln(183, 109, 126, 81, metalLight);
-    q(metalDark, 128, 77, 114, 72, 112, 84, 125, 89);
-    q(metal, 127, 78, 116, 74, 115, 82, 125, 86);
-    ln(122, 76, 121, 87, metalDark);
-    ln(118, 75, 117, 84, metalDark);
-    // Scope: rings, tube, objective bell with a glinting lens.
-    q(metalDark, 188, 93, 194, 93, 195, 111, 188, 111);
-    q(metalDark, 160, 80, 166, 80, 167, 97, 160, 97);
-    q(metalDark, 212, 80, 202, 83, 204, 101, 214, 98);
-    q(metal, 211, 82, 204, 84, 205, 99, 212, 96);
-    q(metalDark, 204, 84, 164, 70, 162, 84, 202, 100);
-    q(metal, 203, 86, 166, 73, 165, 83, 201, 98);
-    ln(203, 86, 166, 73, metalLight);
-    q(metalDark, 168, 69, 156, 66, 154, 84, 166, 87);
-    q(metal, 166, 71, 158, 69, 157, 82, 164, 85);
-    ci(158, 77, 4, metalDark);
-    ci(158, 77, 3, rgb(70, 150, 210));
-    ci(157, 76, 1, white);
-    // Bolt handle: lifts while the next round is chambered.
-    const bool cycling = me.cooldown > 0.25f && me.cooldown < 0.9f;
-    const int bx = cycling ? 236 : 232, by = cycling ? 104 : 118;
-    ln(216, 112, bx, by, metalDark);
-    ln(216, 113, bx, by + 1, metal);
-    ci(bx + 1, by, 3, metalDark);
-    ci(bx + 1, by, 2, metalLight);
-    // Gloved hands on the fore-end and the grip.
-    q(glove, 168, 116, 192, 110, 200, 128, 174, 136);
-    q(gloveLight, 172, 117, 190, 112, 193, 119, 175, 124);
-    q(glove, 204, 118, 224, 112, 236, 134, 212, 140);
-    q(gloveLight, 208, 118, 222, 114, 225, 121, 210, 125);
-    if (me.flash > 0.07f) {
-        ci(113, 80, 8, gold);
-        ci(113, 80, 4, white);
-        ln(98, 70, 128, 84, gold);
+    // '.' is the outline, a..h are the flat steel, stock and lens colours.
+    static constexpr uint16_t colors[] = {
+        rgb(23, 28, 32), rgb(66, 78, 85), rgb(151, 164, 159),
+        rgb(122, 163, 66), rgb(199, 219, 117), rgb(82, 119, 58),
+        rgb(79, 90, 69), rgb(57, 135, 142), rgb(181, 235, 211)
+    };
+    const float kick = std::min(1.f, me.flash / 0.12f);
+    const int x = 134 + roundi(kick * 5);
+    const int y = 76 + roundi(kick * 6) + (me.jumpT > 0 ? 5 : 0)
+                     + (moving ? roundi(std::sin(ms * .012f)) : 0);
+    for (unsigned row = 0; row < sizeof(art) / sizeof(art[0]); ++row) {
+        const int top = y + 2 * int(row);
+        if (top >= 135) break;
+        const char* pixels = art[row];
+        for (int start = 0; pixels[start];) {
+            const char color = pixels[start];
+            int end = start + 1;
+            while (pixels[end] == color) ++end;
+            const int left = x + 2 * start;
+            if (left >= 240) break;
+            if (color != ' ') {
+                const int right = std::min(239, x + 2 * end - 1);
+                const uint16_t value = colors[color == '.' ? 0 : 1 + color - 'a'];
+                fillSpan(top, left, right, value);
+                if (top + 1 < 135) fillSpan(top + 1, left, right, value);
+            }
+            start = end;
+        }
+    }
+    auto& c = display::canvas();
+    const bool cycling = me.cooldown > .25f && me.cooldown < .9f;
+    const int bx = x + (cycling ? 88 : 84), by = y + (cycling ? 32 : 43);
+    c.drawLine(x + 76, y + 37, bx, by, colors[0]);
+    c.fillCircle(bx, by, 3, colors[0]);
+    c.drawPixel(bx - 1, by - 1, colors[2]);
+    if (me.flash > .07f) {
+        const int mx = x + 1, my = y + 10;
+        c.drawLine(mx - 9, my - 5, mx + 2, my + 1, gold);
+        c.fillCircle(mx, my, 5, gold);
+        c.fillCircle(mx, my, 2, white);
     }
 }
 
-void drawCrosshair(const G::Player& me) {
+void drawCrosshair(const G::Player& me, bool scoped) {
     auto& c = display::canvas();
     const int cx = 120, cy = 67;
-    for (int o = 0; o < 2; ++o) {
+    if (scoped) {
+        // Mask the world outside the lens. Keep HUD and hit feedback above the mask.
+        static uint8_t halfWidth[135];
+        static bool ready = false;
+        if (!ready) {
+            for (int y = 0; y < 135; ++y) {
+                const int dy = y - cy;
+                halfWidth[y] = int(std::sqrt(float(67 * 67 - dy * dy)));
+            }
+            ready = true;
+        }
+        for (int y = 0; y < 135; ++y) {
+            const int left = cx - halfWidth[y], right = cx + halfWidth[y] + 1;
+            fillSpan(y, 0, left - 1, ink);
+            fillSpan(y, right, 239, ink);
+        }
+        c.drawFastHLine(cx - 67, cy, 135, ink);
+        c.drawFastVLine(cx, 0, 135, ink);
+    } else for (int o = 0; o < 2; ++o) {
         const uint16_t col = o == 0 ? ink : white;
         c.drawFastHLine(cx - 8 + o, cy + o, 5, col); c.drawFastHLine(cx + 4 + o, cy + o, 5, col);
         c.drawFastVLine(cx + o, cy - 8 + o, 5, col); c.drawFastVLine(cx + o, cy + 4 + o, 5, col);
@@ -790,6 +819,8 @@ void MidDiffGame::draw(int local, const arcade::DrawCtx& ctx) {
                    ? static_cast<uint16_t*>(c.getBuffer()) : nullptr;
 #endif
     const Player& me = players[local];
+    const bool scoped = ctx.scoped && me.dead <= 0;
+    g_focal = scoped ? 380.f : 190.f;
     const int foeIndex = 1 - local;
     const int myTeam = team(local);
 
@@ -840,8 +871,8 @@ void MidDiffGame::draw(int local, const arcade::DrawCtx& ctx) {
         static float lastX[2], lastZ[2];
         moving = std::fabs(me.x - lastX[local]) + std::fabs(me.z - lastZ[local]) > 0.012f;
         lastX[local] = me.x; lastZ[local] = me.z;
-        drawGun(me, ctx.nowMs, moving);
-        drawCrosshair(me);
+        if (!scoped) drawGun(me, ctx.nowMs, moving);
+        drawCrosshair(me, scoped);
     }
 
     // Damage flash around the screen edge.
@@ -913,7 +944,10 @@ void MidDiffGame::draw(int local, const arcade::DrawCtx& ctx) {
 
 void MidDiffGame::sfx(uint32_t ev) {
     using sound::Note;
-    static const Note mine[] = {{1100, 10}, {140, 45}}, theirs[] = {{700, 10}, {120, 35}}, ping[] = {{1500, 18}, {2100, 24}},
+    static const uint8_t shot[] = {
+#include "awp_pcm.inc"
+    };
+    static const Note ping[] = {{1500, 18}, {2100, 24}},
                       head[] = {{1800, 16}, {2600, 20}, {3400, 40}}, hurt[] = {{180, 30}, {90, 70}},
                       die[] = {{300, 40}, {200, 50}, {120, 90}}, gate[] = {{240, 18}, {180, 22}, {250, 18}, {170, 26}},
                       finish[] = {{660, 70}, {880, 70}, {1320, 130}}, lose[] = {{440, 70}, {330, 80}, {220, 130}};
@@ -921,14 +955,15 @@ void MidDiffGame::sfx(uint32_t ev) {
     const uint32_t myShot = me ? ShotP1 : ShotP0, theirShot = me ? ShotP0 : ShotP1;
     const uint32_t iWasHit = me ? HurtP1 : HurtP0, theyWereHit = me ? HurtP0 : HurtP1;
     const uint32_t iDied = me ? DieP1 : DieP0, theyDied = me ? DieP0 : DieP1;
-    if ((ev & (DieP0 | DieP1)) && phase_ == arcade::MatchPhase::MatchEnd) sound::play(winner == me ? finish : lose, 3, 5);
-    else if (ev & iDied) sound::play(die, 3, 4);
-    else if (ev & iWasHit) sound::play(hurt, 2, 4);
-    else if (ev & theyDied) sound::play(head, 3, 4);
-    else if (ev & theyWereHit) sound::play(ping, 2, 3);
-    else if (ev & myShot) sound::play(mine, 2, 2);
-    else if (ev & theirShot) sound::play(theirs, 2, 1);
-    else if (ev & GateMove) sound::play(gate, 1, 1);
+    if (ev & myShot) sound::playSample(shot, sizeof(shot), 12000, false);
+    if (ev & theirShot) sound::playSample(shot, sizeof(shot), 10600, true);
+    const uint16_t delay = ev & (myShot | theirShot) ? 75 : 0;
+    if ((ev & (DieP0 | DieP1)) && phase_ == arcade::MatchPhase::MatchEnd) sound::play(winner == me ? finish : lose, 3, 5, delay);
+    else if (ev & iDied) sound::play(die, 3, 4, delay);
+    else if (ev & iWasHit) sound::play(hurt, 2, 4, delay);
+    else if (ev & theyDied) sound::play(head, 3, 4, delay);
+    else if (ev & theyWereHit) sound::play(ping, 2, 3, delay);
+    else if (ev & GateMove) sound::play(gate, 4, 1);
 }
 
 namespace middiff_view {
@@ -996,7 +1031,7 @@ void drawCard(int x, int y, int w, int h, uint32_t ms) {
 void drawLobby(uint32_t ms) {
     drawCard(0, 0, 240, 135, ms);
     ui::shadowText("STICK MOVE  CLICK+DIR HOP", 120, 96, 1, white);
-    ui::shadowText("TURN AIM  A FIRE  B CENTER", 120, 108, 1, white);
+    ui::shadowText("A FIRE   B SCOPE   HOLD B ZERO", 120, 108, 1, white);
 }
 
 }  // namespace middiff_view

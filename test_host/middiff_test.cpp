@@ -731,6 +731,7 @@ static void codec() {
         CHECK(same(probe, before));
     };
     invalid([](G& s) { s.players[0].z = 3; });                                   // outside its own half
+    invalid([](G& s) { s.players[1].yaw = 71; });
     invalid([](G& s) { s.players[1].hp = 200; });
     invalid([](G& s) { s.players[0].dead = 1.0f; });                              // dead with health left
     invalid([](G& s) { s.players[0].invuln = 3.0f; });
@@ -740,7 +741,10 @@ static void codec() {
     invalid([](G& s) { s.phase_ = arcade::MatchPhase::MatchEnd; });               // over without a winner
     invalid([](G& s) { s.score[0] = 5; s.winner = -1; });
     invalid([](G& s) { s.gate.state = static_cast<G::GateState>(4); });
-    // A client shows its own sensor straight away.
+    // The local client applies the same stop as the host, then follows fresh input immediately.
+    c.localInput(1, p[1]);
+    CHECK(c.lookYaw(1) == -G::kYawLimit);
+    p[1].aim = 35.0f;
     c.localInput(1, p[1]);
     CHECK(std::fabs(c.lookYaw(1) - p[1].aim) < 1e-4f && c.lookYaw(0) == c.players[0].yaw);
 }

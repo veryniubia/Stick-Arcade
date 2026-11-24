@@ -65,7 +65,7 @@ bool hitBox(const float o[3], const float d[3], const float lo[3], const float h
 
 }  // namespace
 
-const arcade::GameInfo kMidDiffInfo = {"middiff", 6, 2, sizeof(MidDiffGame), 0, create, 2, false, true};
+const arcade::GameInfo kMidDiffInfo = {"middiff", 6, 3, sizeof(MidDiffGame), 0, create, 2, false, true};
 
 using K = MidDiffGame::Kind;
 // Mid wall (0..10): a doorway on each side of the centre arch, 4 m high, doorways 2.9 m. Left doorway: iron lift gate.

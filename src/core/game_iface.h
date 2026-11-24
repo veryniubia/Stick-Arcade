@@ -21,6 +21,7 @@ enum class MatchPhase : uint8_t { Playing, RoundEnd, MatchEnd };
 struct DrawCtx {
     bool solo = false;
     uint32_t nowMs = 0;
+    bool scoped = false;
 };
 
 class IGame {
