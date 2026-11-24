@@ -764,6 +764,33 @@ static void testSamuraiOverNetwork(float loss, int latency, int jitter) {
     }
 }
 
+static void testSamuraiDelayedDraw(float loss, int latency, int jitter) {
+    Link l;l.loss=loss;l.latency=latency;l.jitter=jitter;l.rng=119;
+    auto& c=l.add(kClient,0,&kSamuraiDuelInfo);auto& h=l.add(kHost,0,&kSamuraiDuelInfo);
+    CHECK(l.runUntil(30000,[&]{return bothPlaying(l);}));l.run(200);
+    auto& g=samuraiOf(h);g.score[0]=g.score[1]=4;
+    // The first match point must replicate as a live settlement, never a premature win.
+    auto& first=g.bullets[0];first.active=true;first.owner=0;first.direction=g.fighters[1].x>g.fighters[0].x ? 1:-1;
+    first.reflected=g.isSword(0);first.x=g.fighters[1].x-first.direction*6;first.y=SamuraiDuelGame::kFloor-8;
+    l.run(400);
+    CHECK(g.score[0]==5 && g.phase()==arcade::MatchPhase::RoundEnd);
+    CHECK(samuraiOf(c).score[0]==5 && samuraiOf(c).phase()==arcade::MatchPhase::RoundEnd);
+    CHECK(samuraiOf(c).fighters[1].down);
+    auto& second=g.bullets[1];second.active=true;second.owner=1;second.direction=-first.direction;
+    second.reflected=g.isSword(1);second.x=g.fighters[0].x-second.direction*6;second.y=SamuraiDuelGame::kFloor-8;
+    l.run(200);CHECK(g.score[1]==5 && g.phaseTimer>1.2f);
+    CHECK(l.runUntil(3000,[&]{return samuraiOf(c).phase()==arcade::MatchPhase::MatchEnd;}));
+    l.run(300);arcade::Writer a,b;g.encode(a);samuraiOf(c).encode(b);
+    CHECK(g.winner==-1 && samuraiOf(c).winner==-1 && a.n==b.n && memcmp(a.buf,b.buf,a.n)==0 && l.maxLen<=250);
+    const int sword=g.swordPlayer;h.in.again=c.in.again=true;
+    CHECK(l.runUntil(10000,[&]{return g.phase()==arcade::MatchPhase::Playing && g.score[0]==0;}));
+    CHECK(g.swordPlayer==1-sword);
+
+    arcade::GameInfo previous=kSamuraiDuelInfo;--previous.protoVer;
+    Link isolated;auto& old=isolated.add(kClient,0,&previous);auto& current=isolated.add(kHost,0,&kSamuraiDuelInfo);
+    isolated.run(6000);CHECK(old.s.status()==Status::Searching && current.s.status()==Status::Searching);
+}
+
 static MidDiffGame& midOf(Endpoint& e) { return *static_cast<MidDiffGame*>(e.gi.game); }
 static void midPlace(MidDiffGame& g, int i, float x, float depth) {
     g.players[i].x = x;
@@ -877,6 +904,8 @@ int main() {
     testBumperOverNetwork(0.2f,15,20);
     testSamuraiOverNetwork(0,0,0);
     testSamuraiOverNetwork(.2f,15,20);
+    testSamuraiDelayedDraw(0,0,0);
+    testSamuraiDelayedDraw(.2f,15,20);
     testMidDiffOverNetwork(0,0,0);
     testMidDiffOverNetwork(.2f,15,20);
     testGarbageDoesNotCrash();

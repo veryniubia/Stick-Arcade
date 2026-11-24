@@ -2,7 +2,7 @@
 
 namespace offline_trace {
 
-#ifdef DEBUG_OFFLINE_TRACE
+#if defined(DEBUG_OFFLINE_TRACE) || defined(STICKS3_SIMULATOR)
 void begin();
 void poll();
 void record(const char* event, int value = 0, int detail = 0);

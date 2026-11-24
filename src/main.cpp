@@ -18,15 +18,17 @@
 #include "ui/launcher.h"
 #include "ui/play.h"
 #include "ui/settings_page.h"
+#include "ui/title.h"
 
 namespace {
 
-enum class Screen : uint8_t { Launcher, Settings, Play };
+enum class Screen : uint8_t { Launcher, Settings, Play, Title };
 
 constexpr int kMenuFps = 30;
+constexpr int kTitleFps = 25;
 constexpr int kPlayFps = 60;
 
-Screen g_screen = Screen::Launcher;
+Screen g_screen = Screen::Title;
 uint32_t g_lastMs = 0;
 
 void goLauncher() {
@@ -217,8 +219,9 @@ void setup() {
     display::begin();
     registry::begin();
     input::begin();
-    goLauncher();
     g_lastMs = millis();
+    title::begin(g_lastMs);
+    display::setTargetFps(kTitleFps);
 #ifdef DEBUG_REMOTE
     perf::begin();
 #endif
@@ -244,6 +247,12 @@ void loop() {
     if (dt > 0.05f) dt = 0.05f;
 
     switch (g_screen) {
+        case Screen::Title: {
+            const bool remoteA = debug::aPress();
+            const bool remoteB = debug::bPress();
+            if (title::update(now, input::aPressed() || input::bPressed() || remoteA || remoteB)) goLauncher();
+            break;
+        }
         case Screen::Launcher: {
             const launcher::Result r = launcher::update(dt);
             if (r == launcher::Result::Game) startPlay(launcher::selectedGame());
@@ -266,6 +275,7 @@ void loop() {
 #endif
 
     switch (g_screen) {
+        case Screen::Title: title::draw(now); break;
         case Screen::Launcher: launcher::draw(); break;
         case Screen::Settings: settings_page::draw(); break;
         case Screen::Play: play::draw(); break;

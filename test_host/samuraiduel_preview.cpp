@@ -63,5 +63,28 @@ int main(int argc,char** argv) {
     ui::shadowText("PING 24",215,10,1,65535);save("online_ping");
     samuraiduel_view::drawLobby(1200);save("lobby");
     canvas.fillRect(0,0,240,135,0);samuraiduel_view::drawCard(60,28,120,78,1200);save("card");
+    // Real step-by-step actions, not poses substituted into an illustrative mockup.
+    for(int role=0;role<2;++role) {
+        g.begin(arcade::Mode::Solo,role ? 2:0);p[0]=p[1]=PadInput();
+        g.fighters[0].x=84;g.fighters[1].x=260;
+        g.burgerX=84;g.burgerY=SamuraiDuelGame::kFloor-9;
+        const char* name=role ? "gun":"thrust";
+        for(int frame=0;frame<75;++frame) {
+            if(frame==6)++p[0].aCount;
+            ctx.nowMs=1200+frame*1000/60;
+            g.step(1.f/60,p);g.draw(0,ctx);
+            char label[48];snprintf(label,sizeof(label),"%s_%03d",name,frame);save(label);
+        }
+    }
+    g.begin(arcade::Mode::Host,0);p[0]=p[1]=PadInput();g.burgerActive=false;
+    g.score[0]=g.score[1]=4;g.fighters[0].x=84;g.fighters[1].x=230;
+    for(int i=0;i<2;++i) {
+        auto& shot=g.bullets[i];shot.active=true;shot.owner=i;shot.direction=i ? -1:1;
+        shot.reflected=g.isSword(i);shot.x=g.fighters[1-i].x-shot.direction*7;shot.y=SamuraiDuelGame::kFloor-8;
+    }
+    for(int frame=0;frame<105;++frame) {
+        ctx.nowMs=1200+frame*1000/60;g.step(1.f/60,p);g.draw(0,ctx);
+        char label[48];snprintf(label,sizeof(label),"double_ko_%03d",frame);save(label);
+    }
     return 0;
 }

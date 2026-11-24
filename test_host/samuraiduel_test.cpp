@@ -106,11 +106,11 @@ static void parryAndDamage() {
     bullet(g,110,G::kFloor-8,-1);ev=g.step(.05f,p);CHECK(ev&G::Parry);CHECK(g.score[1]==0);
     // A different-height bullet passes harmlessly.
     g=fresh();g.fighters[0].x=100;bullet(g,108,78,-1);g.step(tick,p);CHECK(g.score[1]==0);
-    // Overlapping bullets award one point only, then freeze the exchange.
+    // Repeated hits on a fallen fighter never award another point; other shots stay alive.
     g=fresh();g.fighters[0].x=100;bullet(g,108,G::kFloor-8,-1);g.bullets[1]=g.bullets[0];
     g.step(tick,p);CHECK(g.score[1]==1);
     CHECK(g.phase()==arcade::MatchPhase::RoundEnd);
-    for(const auto& shot:g.bullets)CHECK(!shot.active);
+    CHECK(g.fighters[0].down && g.bullets[1].active);
     run(g,p,30);CHECK(g.score[1]==1);
     // A single slash only damages once, and a subsequent jump cannot turn it into an aerial attack.
     g=fresh();g.fighters[0].x=100;g.fighters[1].x=118;++p[0].aCount;run(g,p,10);
@@ -124,9 +124,10 @@ static void roundsAndWire() {
         g.bullets[0].reflected=g.isSword(0);
         g.step(tick,p);
         CHECK(g.score[0]==round+1);
+        CHECK(g.phase()==arcade::MatchPhase::RoundEnd);int old=g.swordPlayer;
+        run(g,p,100);CHECK(g.swordPlayer==old);
         if(round<G::kWinningScore-1) {
-            CHECK(g.phase()==arcade::MatchPhase::RoundEnd);int old=g.swordPlayer;
-            run(g,p,100);CHECK(g.swordPlayer==old);CHECK(g.phase()==arcade::MatchPhase::Playing);
+            CHECK(g.phase()==arcade::MatchPhase::Playing);
             CHECK(g.fighters[0].x==startingX[0] && g.fighters[1].x==startingX[1]);
         }
     }
@@ -265,14 +266,14 @@ static void firstToFive() {
             g.bullets[0].reflected=g.isSword(scorer);
             uint32_t events=g.step(tick,p);
             CHECK(events&G::Round);CHECK(g.score[scorer]==point && g.score[victim]==0);
-            CHECK(bool(events&G::Finish)==(point==G::kWinningScore));
+            CHECK(!(events&G::Finish)); // Even match point waits for surviving bullets.
             arcade::Writer w;g.encode(w);G c;c.begin(arcade::Mode::Client,1);
             arcade::Reader r(w.buf,w.n);CHECK(c.decode(r));CHECK(same(g,c));
             auto bad=w;bad.buf[9]=6;arcade::Reader invalid(bad.buf,bad.n);CHECK(!c.decode(invalid));
+            // Living fighters can act during the delay; held inputs must not replay at spawn.
+            ++p[0].aCount;++p[1].bCount;p[0].a=p[1].b=true;
+            run(g,p,100);
             if(point<G::kWinningScore) {
-                // Inputs pressed during the score pause must not trigger on the next spawn.
-                ++p[0].aCount;++p[1].bCount;p[0].a=p[1].b=true;
-                run(g,p,100);
                 CHECK(g.phase()==arcade::MatchPhase::Playing);
                 for(const auto& f:g.fighters)CHECK(f.y==G::kFloor && f.action==0 && f.cooldown==0);
                 for(const auto& b:g.bullets)CHECK(!b.active);
@@ -307,18 +308,115 @@ static void burgerRoundsAndWeapons() {
             ++shots; lastFrame=i;
         }
     }
-    CHECK(shots==3 && !g.bullets[0].followup && g.bullets[1].followup && g.bullets[2].followup);
+    CHECK(shots==3);
     arcade::Writer w; g.encode(w); G client; client.begin(arcade::Mode::Client,0);
     arcade::Reader r(w.buf,w.n); CHECK(client.decode(r) && same(g,client));
-    for (bool followup : {false,true}) {
+    for (int slot=0;slot<3;++slot) {
         g=fresh(); g.fighters[0].action=.29f;
         bullet(g,g.fighters[0].x+9,G::kFloor-8,-1);
-        g.bullets[0].followup=followup;
+        g.bullets[slot]=g.bullets[0];
+        if(slot)g.bullets[0].active=false;
         const auto events=g.step(.05f,p);
-        CHECK(bool(events&G::Parry)==!followup && bool(events&G::Hurt)==followup);
+        CHECK((events&G::Parry) && !(events&G::Hurt));
     }
 }
+static void thrustAndUniversalParry() {
+    for (int mirror : {-1,1}) for (bool boosted : {false,true}) {
+        G g=fresh();PadInput p[2]={};g.burgerActive=false;
+        auto& s=g.fighters[0];auto& gun=g.fighters[1];
+        s.x=mirror>0 ? 60:260;gun.x=mirror>0 ? 260:60;
+        s.facing=mirror;gun.facing=-mirror;
+        g.boostRounds[0]=boosted ? 2:0;g.boostRounds[1]=2;
+        ++p[1].aCount;
+        int shots=0,parries=0;
+        // Launch a real three-shot burst, then attack when the first shot is approaching.
+        for(int frame=0;frame<100;++frame) {
+            if(g.bullets[0].active && (g.bullets[0].x-s.x)*mirror<66 && p[0].aCount==0)++p[0].aCount;
+            const auto ev=g.step(tick,p);
+            shots+=(ev&G::Shot)!=0;parries+=(ev&G::Parry)!=0;
+            arcade::Writer w;g.encode(w);G client;client.begin(arcade::Mode::Client,0);
+            arcade::Reader r(w.buf,w.n);CHECK(client.decode(r) && same(g,client));
+        }
+        CHECK(shots==3);
+        CHECK(boosted ? parries==3 && g.score[1]==0 : parries==1 && g.score[1]==1);
+        if(boosted)CHECK((s.x-(mirror>0 ? 60:260))*mirror>18);
+    }
+    for(bool thrust : {false,true}) for(float remaining : {.01f,.035f}) {
+        G g=fresh();PadInput p[2]={};auto& s=g.fighters[0];
+        s.thrust=thrust;s.action=remaining;
+        bullet(g,s.x+7,G::kFloor-8,-1);
+        CHECK(!(g.step(tick,p)&G::Parry) && s.down); // Both exposed recoveries.
+    }
+    // Thrust cannot hover across a platform exit or turn during an attack.
+    for(int mirror : {-1,1}) {
+        G g=fresh();PadInput p[2]={};auto& s=g.fighters[0];
+        s.x=mirror>0 ? 125:25;s.y=106;s.facing=mirror;g.boostRounds[0]=2;
+        ++p[0].aCount;g.step(tick,p);p[0].aim=-32.f*mirror;
+        for(int frame=0;frame<7;++frame) {
+            g.step(tick,p);
+            if(s.action>0)CHECK(s.facing==mirror);
+        }
+        CHECK(!s.grounded && s.action==0);
+    }
+    // Picking up a boost during a normal slash must not change its timing mid-animation.
+    G g=fresh();PadInput p[2]={};++p[0].aCount;g.step(tick,p);
+    g.burgerX=g.fighters[0].x;g.burgerY=G::kFloor-9;g.step(tick,p);
+    CHECK(g.boostRounds[0]==2 && !g.fighters[0].thrust);
+}
+
+static void delayedDeathsAndDraw() {
+    G g=fresh();PadInput p[2]={};g.burgerActive=false;
+    // A returning bullet kills the shooter; the shooter's existing bullet can still kill later.
+    bullet(g,g.fighters[1].x-7,G::kFloor-8,1,0);g.bullets[0].reflected=true;
+    auto& later=g.bullets[1];later.active=true;later.owner=1;later.direction=-1;
+    later.x=250;later.y=G::kFloor-8;
+    CHECK(g.step(tick,p)&G::Hurt);
+    CHECK(g.fighters[1].down && g.bullets[1].active && g.score[0]==1);
+    const float deadX=g.fighters[1].x;
+    p[0].aim=32;++p[0].bCount;p[0].b=true;
+    p[1].aim=-32;++p[1].aCount;++p[1].bCount;p[1].a=p[1].b=true;
+    run(g,p,15);
+    CHECK(g.fighters[0].x>44 && !g.fighters[0].grounded);
+    CHECK(g.fighters[1].x>deadX && g.fighters[1].grounded && g.fighters[1].action==0);
+    // Put the survivor back into the remaining shot's path, late in the first death timer.
+    p[0]=PadInput();g.fighters[0].x=44;g.fighters[0].y=G::kFloor;
+    g.fighters[0].grounded=true;g.fighters[0].vx=g.fighters[0].vy=0;
+    g.bullets[1].x=50;g.phaseTimer=.15f;
+    CHECK(g.step(tick,p)&G::Hurt);
+    CHECK(g.score[0]==1 && g.score[1]==1 && g.phaseTimer==G::kRoundPause);
+    CHECK(g.fighters[0].down && g.fighters[1].down);
+    run(g,p,75);CHECK(g.phase()==arcade::MatchPhase::RoundEnd);
+    run(g,p,25);CHECK(g.phase()==arcade::MatchPhase::Playing);
+    CHECK(!g.fighters[0].down && !g.fighters[1].down);
+
+    // A dead gunner never emits the remaining rounds of its already-started burst.
+    g=fresh();g.boostRounds[1]=2;p[0]=p[1]=PadInput();++p[1].aCount;
+    int shots=0;for(int f=0;f<12;++f)shots+=(g.step(tick,p)&G::Shot)!=0;
+    CHECK(shots==1);
+    bullet(g,g.fighters[1].x-7,G::kFloor-8,1,0);g.bullets[0].reflected=true;
+    g.step(tick,p);
+    for(int f=0;f<30;++f)CHECK(!(g.step(tick,p)&G::Shot));
+
+    // Match point is provisional until the last death has had 1.5 seconds to play out.
+    for(bool reverse : {false,true}) {
+        g=fresh();p[0]=p[1]=PadInput();g.score[0]=g.score[1]=4;
+        for(int i=0;i<2;++i) {
+            const int owner=reverse ? 1-i:i, victim=1-owner;
+            auto& b=g.bullets[i];b.active=true;b.owner=owner;b.direction=owner==0 ? 1:-1;
+            b.reflected=owner==g.swordPlayer;b.x=g.fighters[victim].x-b.direction*6;b.y=G::kFloor-8;
+        }
+        CHECK(!(g.step(tick,p)&G::Finish));
+        CHECK(g.score[0]==5 && g.score[1]==5 && g.phase()==arcade::MatchPhase::RoundEnd);
+        run(g,p,100);CHECK(g.phase()==arcade::MatchPhase::MatchEnd && g.winner==-1);
+        arcade::Writer w;g.encode(w);G client;client.begin(arcade::Mode::Client,0);
+        arcade::Reader r(w.buf,w.n);CHECK(client.decode(r) && same(g,client));
+        const int previous=g.swordPlayer;g.begin(arcade::Mode::Host,123);
+        CHECK(g.swordPlayer==1-previous);
+    }
+}
+
 int main() {
+    thrustAndUniversalParry();delayedDeathsAndDraw();
     burgerRoundsAndWeapons();
     movementAndPlatforms();attacksAndInputs();tiltFacing();parryAndDamage();roundsAndWire();deterministicSolo();expandedArenaRegression();
     soloOpponentHasNoInput();soloPracticeKeepsScoring();firstToFive();
@@ -329,7 +427,7 @@ int main() {
             int scorer=point<losses ? 1-winner:winner, victim=1-scorer;
             bullet(g,g.fighters[victim].x-7,G::kFloor-8,1,scorer);
             g.bullets[0].reflected=g.isSword(scorer);g.step(tick,p);
-            if(point<4+losses)run(g,p,100);
+            run(g,p,100);
         }
         CHECK(g.winner==winner);
         int previousSword=g.swordPlayer;

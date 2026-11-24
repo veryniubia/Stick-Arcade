@@ -55,6 +55,21 @@ def main():
             swings.paste(crop, (col*224+16, row*148+16))
             labels.text((col*224+16, row*148+1), f'{side.title()} / {phase}', fill='#e7e6c2')
     swings.save(out / 'slash-animation.png')
+    actions = Image.new('RGB', (4*480, 2*292), '#101728')
+    labels = ImageDraw.Draw(actions)
+    for row, name in enumerate(['thrust', 'gun']):
+        frames = [Image.open(out / f'{name}_{i:03d}.ppm') for i in range(75)]
+        for col, i in enumerate([8, 17, 26, 35]):
+            actions.paste(frames[i].resize((480,270), Image.Resampling.NEAREST), (col*480,row*292+22))
+            labels.text((col*480+8,row*292+5),f'{name.upper()} / {max(0,i-6)*1000//60} ms',fill='#e7e6c2')
+        scaled = [frame.resize((720,405),Image.Resampling.NEAREST) for frame in frames]
+        scaled[0].save(out / f'{name}-action.gif',save_all=True,append_images=scaled[1:],duration=17,loop=0)
+        frames[17].resize((960,540),Image.Resampling.NEAREST).save(out / f'{name}-action.png')
+    actions.save(out / 'duel-actions.png')
+    death_frames = [Image.open(out / f'double_ko_{i:03d}.ppm').resize((720,405),Image.Resampling.NEAREST) for i in range(105)]
+    death_frames[0].save(out / 'double-ko.gif',save_all=True,append_images=death_frames[1:],duration=17,loop=0)
+    death_frames[30].save(out / 'double-ko.png')
+    death_frames[-1].save(out / 'draw.png')
     Image.open(out/'arena.png').resize((960,540),Image.Resampling.NEAREST).save(out/'arena-4x.png')
     print(out / 'contact-sheet.png')
 

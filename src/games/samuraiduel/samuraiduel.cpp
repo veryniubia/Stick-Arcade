@@ -8,7 +8,7 @@ float clamp(float x, float lo, float hi) { return std::max(lo, std::min(x, hi));
 void decay(float& t, float dt) { t = std::max(0.f, t - dt); }
 arcade::IGame* create(void* mem, arcade::Arena&) { return new (mem) SamuraiDuelGame(); }
 }
-const arcade::GameInfo kSamuraiDuelInfo = {"samuraiduel", 5, 5, sizeof(SamuraiDuelGame), 0, create, 2, false};
+const arcade::GameInfo kSamuraiDuelInfo = {"samuraiduel", 5, 6, sizeof(SamuraiDuelGame), 0, create, 2, false};
 const SamuraiDuelGame::Platform SamuraiDuelGame::platforms[3] = {
     {24, 126, 106}, {90, 230, 72}, {194, 296, 106}
 };
@@ -57,6 +57,7 @@ uint32_t SamuraiDuelGame::collectBurger() {
     float nearest = 13.f * 13.f;
     int collector = -1;
     for (int i = 0; i < 2; ++i) {
+        if (fighters[i].down) continue;
         const float dx = fighters[i].x - burgerX, dy = fighters[i].y - 9 - burgerY;
         const float distance = dx * dx + dy * dy;
         if (distance < nearest || (distance == nearest && collector >= 0 && (burgerRandom_ & 1))) {
@@ -78,8 +79,9 @@ void SamuraiDuelGame::prime(const PadInput p[2]) {
 }
 bool SamuraiDuelGame::slashActive(int i) const {
     const auto& f = fighters[i];
-    // 50ms preparation, 120ms blade window, then exposed recovery.
-    return isSword(i) && f.grounded && f.action > kSlashFollowThrough && f.action <= kSlashDuration - kSlashWindup;
+    // Every sword attack shares this window; bullets have no attack-specific exceptions.
+    return isSword(i) && !f.down && f.grounded && f.action > attackRecovery(i) &&
+           f.action <= attackDuration(i) - kSlashWindup;
 }
 uint32_t SamuraiDuelGame::move(int i, const PadInput& p, float dt) {
     auto& f = fighters[i]; uint32_t events = 0;
@@ -87,27 +89,31 @@ uint32_t SamuraiDuelGame::move(int i, const PadInput& p, float dt) {
     bool pressB = p.bCount != lastB_[i] || (p.b && !heldB_[i]);
     lastA_[i] = p.aCount; lastB_[i] = p.bCount; heldA_[i] = p.a; heldB_[i] = p.b;
     decay(f.cooldown, dt); decay(f.recoil, dt);
+    decay(f.shotFx, dt); decay(f.parryFx, dt);
+    if (f.down) f.downTime = std::min(3.f, f.downTime + dt);
     decay(f.jumpBuffer, dt); decay(f.attackBuffer, dt);
-    if (pressB) f.jumpBuffer = .11f;
-    if (pressA) f.attackBuffer = .09f;
+    if (pressB && !f.down) f.jumpBuffer = .11f;
+    if (pressA && !f.down) f.attackBuffer = .09f;
     // A grounded slash cannot be carried into the air by jumping midway through it.
-    if (f.jumpBuffer > 0 && f.grounded && (!isSword(i) || f.action <= 0) && f.recoil <= 0) {
+    if (!f.down && f.jumpBuffer > 0 && f.grounded && (!isSword(i) || f.action <= 0) && f.recoil <= 0) {
         f.vy = -171; f.grounded = false; f.jumpBuffer = 0; events |= Jump;
     }
     float oldY = f.y;
     float aim = std::isfinite(p.aim) ? clamp(p.aim, -45, 45) : 0;
     float axis = fabsf(aim) < 5 ? 0 : std::copysign(clamp((fabsf(aim)-5)/27, 0, 1), aim);
+    if (f.down) axis = 0;
     float target = axis * (isSword(i) ? 74 : 64);
     if (isSword(i) && f.action > 0) target *= .18f;
-    if (f.recoil <= 0) f.vx += (target - f.vx) * std::min(1.f, dt * (f.grounded ? 22 : 9));
+    if (f.down) f.vx *= std::max(0.f, 1.f-dt*9);
+    else if (f.recoil <= 0) f.vx += (target - f.vx) * std::min(1.f, dt * (f.grounded ? 22 : 9));
     float stepX = 0;
-    if (isSword(i) && boostRounds[i] && f.grounded && f.action > 0 && f.recoil <= 0) {
-        const float sweepStart = kSlashDuration - kSlashWindup;
-        const float overlap = std::min(f.action, sweepStart) - std::max(f.action - dt, kSlashFollowThrough);
-        stepX = f.facing * kStepDistance * std::max(0.f, overlap) / (sweepStart - kSlashFollowThrough);
+    if (isSword(i) && f.thrust && !f.down && f.grounded && f.action > 0) {
+        const float travelStart = kThrustDuration - kSlashWindup;
+        const float overlap = std::min(f.action, travelStart) - std::max(f.action - dt, travelStart-kThrustTravelTime);
+        stepX = f.facing * kThrustDistance * std::max(0.f, overlap) / kThrustTravelTime;
     }
     f.x = clamp(f.x + f.vx * dt + stepX, kLeft, kRight);
-    if (!f.grounded && !p.b && f.vy < -78) f.vy = -78;
+    if (!f.down && !f.grounded && !p.b && f.vy < -78) f.vy = -78;
     f.vy = std::min(260.f, f.vy + 340 * dt); f.y += f.vy * dt;
     f.grounded = false;
     float landing = kFloor;
@@ -119,28 +125,27 @@ uint32_t SamuraiDuelGame::move(int i, const PadInput& p, float dt) {
     float before = f.action; decay(f.action, dt);
     if (isSword(i) && !f.grounded) f.action = 0;
     // Fire after visible windup, at current height; facing was locked when A was pressed.
-    if (!isSword(i) && before > 0 && f.action <= 0) {
+    if (!isSword(i) && !f.down && before > 0 && f.action <= 0) {
         for (auto& b : bullets) if (!b.active) {
             b.active = true; b.reflected = false; b.owner = uint8_t(i);
-            b.followup = burstFollowup_;
             b.direction = f.facing; b.x = f.x + f.facing * 10; b.y = f.y - 8;
+            f.shotFx = .18f;
             events |= Shot; break;
         }
         if (shotsLeft_ > 0) {
             --shotsLeft_;
-            burstFollowup_ = true;
             f.action = kBurstInterval + before - dt;
         }
     }
     // Keep the attack heading through the exact tick that releases a shot.
-    if (f.action <= 0 && f.recoil <= 0 && axis != 0) f.facing = axis > 0 ? 1 : -1;
-    if (f.attackBuffer > 0 && f.cooldown <= 0 && f.recoil <= 0 && (!isSword(i) || f.grounded)) {
+    if (!f.down && f.action <= 0 && f.recoil <= 0 && axis != 0) f.facing = axis > 0 ? 1 : -1;
+    if (!f.down && f.attackBuffer > 0 && f.cooldown <= 0 && f.recoil <= 0 && (!isSword(i) || f.grounded)) {
         f.attackBuffer = 0; f.struck = false;
-        f.action = isSword(i) ? kSlashDuration : kShotWindup;
-        f.cooldown = isSword(i) ? kSlashDuration : kShotCooldown;
+        f.thrust = isSword(i) && boostRounds[i] > 0;
+        f.action = isSword(i) ? attackDuration(i) : kShotWindup;
+        f.cooldown = isSword(i) ? attackDuration(i) : kShotCooldown;
         if (isSword(i)) events |= Slash;
         else {
-            burstFollowup_ = false;
             shotsLeft_ = boostRounds[i] ? 2 : 0;
         }
     }
@@ -148,8 +153,12 @@ uint32_t SamuraiDuelGame::move(int i, const PadInput& p, float dt) {
 }
 uint32_t SamuraiDuelGame::damage(int victim, int direction) {
     auto& f = fighters[victim];
-    if (phase_ != arcade::MatchPhase::Playing) return 0;
+    if (phase_ == arcade::MatchPhase::MatchEnd || f.down) return 0;
     f.vx = direction * 83; f.action = 0; f.attackBuffer = 0;
+    f.jumpBuffer = 0; f.down = true; f.downTime = 0; f.fallDirection = int8_t(direction);
+    f.shotFx = f.parryFx = 0;
+    if (!isSword(victim)) shotsLeft_ = 0;
+    if (score[1-victim] != UINT32_MAX) ++score[1-victim];
     sparkX = f.x; sparkY = f.y - 8; spark = .20f; hitStop = .045f;
     return Hurt | finishRound(1-victim);
 }
@@ -161,46 +170,37 @@ uint32_t SamuraiDuelGame::projectiles(float dt) {
         float end = b.x + b.direction * kShotSpeed * dt;
         float lo = std::min(b.x, end), hi = std::max(b.x, end);
         int target = 1 - b.owner; auto& f = fighters[target];
-        float front = f.x + f.facing * kSlashReach;
-        bool blade = !b.followup && slashActive(target) && b.direction == -f.facing &&
+        float front = f.x + f.facing * attackReach(target);
+        bool blade = slashActive(target) && b.direction == -f.facing &&
             fabsf(b.y - (f.y - 8)) <= 8 &&
             hi >= std::min(f.x, front) && lo <= std::max(f.x, front);
         if (blade) {
             b.direction = -b.direction; b.owner = uint8_t(target); b.reflected = true;
             b.x = front + f.facing * 2;
-            f.vx = -f.facing * 24; f.recoil = .11f;
+            f.vx = -f.facing * 8; f.recoil = .055f; f.parryFx = .16f;
             sparkX = front; sparkY = b.y; spark = .18f; hitStop = .025f;
             events |= Parry;
             continue;
         }
-        if (hi >= f.x - 5 && lo <= f.x + 5 && b.y >= f.y - 17 && b.y <= f.y - 1) {
+        if (!f.down && hi >= f.x - 5 && lo <= f.x + 5 && b.y >= f.y - 17 && b.y <= f.y - 1) {
             events |= damage(target, b.direction); b.active = false;
-            return events; // First confirmed hit ends this exchange; never award twice.
         } else { b.x = end; if (b.x < -10 || b.x > kWorldWidth+10) b.active = false; }
     }
     return events;
 }
 uint32_t SamuraiDuelGame::finishRound(int result) {
-    if (phase_ != arcade::MatchPhase::Playing) return 0;
-    for (auto& b : bullets) b.active = false;
-    roundWinner = int8_t(result);
-    if (result >= 0 && score[result] != UINT32_MAX) ++score[result];
+    if (phase_ == arcade::MatchPhase::MatchEnd) return 0;
+    roundWinner = fighters[0].down && fighters[1].down ? -1 : int8_t(result);
+    // A later death gets its own full animation time. Keep inputs and projectiles alive.
     phaseTimer = kRoundPause;
-    if (!solo && result >= 0 && score[result] >= kWinningScore) {
-        winner = int8_t(result); phase_ = arcade::MatchPhase::MatchEnd; return Round | Finish;
-    }
     phase_ = arcade::MatchPhase::RoundEnd; return Round;
 }
 uint32_t SamuraiDuelGame::step(float dt, const PadInput in[2]) {
     if (mode_ == arcade::Mode::Client || !std::isfinite(dt) || dt <= 0 || phase_ == arcade::MatchPhase::MatchEnd) return 0;
     dt = std::min(dt, .05f); elapsed += dt; decay(spark, dt);
-    if (phase_ == arcade::MatchPhase::RoundEnd) {
-        prime(in); decay(phaseTimer, dt);
-        if (phaseTimer <= 0) startRound();
-        return 0;
-    }
+    if (phase_ == arcade::MatchPhase::RoundEnd) decay(phaseTimer, dt);
     if (hitStop > 0) { decay(hitStop, dt); return 0; }
-    roundTime += dt;
+    if (phase_ == arcade::MatchPhase::Playing) roundTime += dt;
     const PadInput p[2] = {in[0], solo ? PadInput{} : in[1]};
     uint32_t events = 0;
     for (int i = 0; i < 2; ++i) events |= move(i, p[i], dt);
@@ -208,10 +208,20 @@ uint32_t SamuraiDuelGame::step(float dt, const PadInput in[2]) {
     events |= projectiles(dt); // An active blade parries before body damage is evaluated.
     int s = swordPlayer, g = 1-s; auto& sword = fighters[s]; auto& gun = fighters[g];
     float dx = (gun.x - sword.x) * sword.facing;
-    if (phase_ == arcade::MatchPhase::Playing && slashActive(s) && !sword.struck && dx >= -2 && dx <= kSlashReach+4 && fabsf(gun.y - sword.y) <= 12) {
+    if (!gun.down && slashActive(s) && !sword.struck && dx >= -2 && dx <= attackReach(s)+4 && fabsf(gun.y - sword.y) <= 12) {
         sword.struck = true; events |= damage(g, sword.facing);
     }
     if (phase_ == arcade::MatchPhase::Playing && roundTime >= 45) events |= finishRound(-1);
+    if (phase_ == arcade::MatchPhase::RoundEnd && phaseTimer <= 0) {
+        if (!solo && (score[0] >= kWinningScore || score[1] >= kWinningScore)) {
+            winner = score[0] == score[1] ? -1 : score[0] > score[1] ? 0 : 1;
+            phase_ = arcade::MatchPhase::MatchEnd;
+            events |= Finish;
+        } else {
+            prime(in); // Do not replay buttons from the preceding exchange at the new spawn.
+            startRound();
+        }
+    }
     return events;
 }
 
@@ -227,10 +237,13 @@ void SamuraiDuelGame::encode(arcade::Writer& w) const {
         w.i16(arcade::q16(f.vx, 64)); w.i16(arcade::q16(f.vy, 64));
         w.u16(uint16_t(lroundf(f.cooldown*1000))); w.u16(uint16_t(lroundf(f.action*1000)));
         w.u8(arcade::q8(f.recoil, 250));
-        w.u8((f.facing > 0 ? 1 : 0) | (f.grounded ? 2 : 0) | (f.struck ? 4 : 0));
+        w.u8((f.facing > 0 ? 1 : 0) | (f.grounded ? 2 : 0) | (f.struck ? 4 : 0) |
+             (f.thrust ? 8 : 0) | (f.down ? 16 : 0) | (f.fallDirection > 0 ? 32 : 0));
+        w.u8(arcade::q8(f.shotFx, 250)); w.u8(arcade::q8(f.parryFx, 250));
+        w.u16(uint16_t(lroundf(f.downTime*1000)));
     }
     for (const auto& b : bullets) {
-        w.u8((b.active ? 1 : 0) | (b.reflected ? 2 : 0) | (b.direction > 0 ? 4 : 0) | (b.owner << 3) | (b.followup ? 16 : 0));
+        w.u8((b.active ? 1 : 0) | (b.reflected ? 2 : 0) | (b.direction > 0 ? 4 : 0) | (b.owner << 3));
         w.i16(arcade::q16(b.x, 32)); w.i16(arcade::q16(b.y, 32));
     }
     w.i16(arcade::q16(burgerX, 32)); w.i16(arcade::q16(burgerY, 32));
@@ -246,22 +259,28 @@ bool SamuraiDuelGame::decode(arcade::Reader& r) {
     if (phase > 2 || soloFlag > 1 || n.swordPlayer > 1 ||
         n.winner < -1 || n.winner > 1 || n.roundWinner < -1 || n.roundWinner > 1 ||
         (!n.solo && (n.score[0] > kWinningScore || n.score[1] > kWinningScore)) || !std::isfinite(n.elapsed) || n.elapsed < 0 ||
-        n.roundTime > 45.06f || n.phaseTimer > 1.601f || n.spark > .204f || n.hitStop > .048f ||
+        n.roundTime > 45.06f || n.phaseTimer > kRoundPause+.001f || n.spark > .204f || n.hitStop > .048f ||
         n.sparkX < -16 || n.sparkX > kWorldWidth+16 || n.sparkY < 0 || n.sparkY > kFloor) return false;
     n.phase_ = arcade::MatchPhase(phase);
-    bool end = !n.solo && (n.score[0] == kWinningScore || n.score[1] == kWinningScore);
-    if (end != (phase == 2) || (end && n.score[0] == kWinningScore && n.score[1] == kWinningScore) ||
-        (end && (n.winner != (n.score[0] == kWinningScore ? 0 : 1) || n.roundWinner != n.winner)) ||
-        (!end && n.winner != -1) || (phase == 0 && (n.roundWinner != -1 || n.phaseTimer != 0))) return false;
+    const bool target = !n.solo && (n.score[0] == kWinningScore || n.score[1] == kWinningScore);
+    const int expected = n.score[0] == n.score[1] ? -1 : n.score[0] > n.score[1] ? 0 : 1;
+    if ((phase == 2 && (!target || n.winner != expected || n.phaseTimer != 0)) ||
+        (phase != 2 && n.winner != -1) ||
+        (phase == 0 && (target || n.roundWinner != -1 || n.phaseTimer != 0))) return false;
     for (int i = 0; i < 2; ++i) {
         auto& f = n.fighters[i];
         f.x = r.i16()/64.f; f.y = r.i16()/64.f; f.vx = r.i16()/64.f; f.vy = r.i16()/64.f;
         f.cooldown = r.u16()/1000.f; f.action = r.u16()/1000.f;
         f.recoil = r.u8()/250.f; uint8_t bits = r.u8();
         f.facing = bits & 1 ? 1 : -1; f.grounded = bits & 2; f.struck = bits & 4;
-        if (bits > 7 || f.x < kLeft || f.x > kRight || f.y < kCeiling || f.y > kFloor ||
+        f.thrust = bits & 8; f.down = bits & 16; f.fallDirection = bits & 32 ? 1 : -1;
+        f.shotFx = r.u8()/250.f; f.parryFx = r.u8()/250.f; f.downTime = r.u16()/1000.f;
+        if (bits > 63 || f.x < kLeft || f.x > kRight || f.y < kCeiling || f.y > kFloor ||
             fabsf(f.vx) > 84 || f.vy < -172 || f.vy > 261 || f.cooldown > .641f ||
-            f.action > (n.isSword(i) ? .361f : .161f) || f.recoil > .164f ||
+            f.action > (n.isSword(i) ? n.attackDuration(i)+.001f : .161f) || f.recoil > .164f ||
+            f.shotFx > .184f || f.parryFx > .164f || f.downTime > 3.001f ||
+            (f.thrust && !n.isSword(i)) || (!f.down && f.downTime != 0) ||
+            (f.down && (f.action > 0 || phase == 0)) ||
             (n.isSword(i) && !f.grounded && f.action > 0)) return false;
         if (f.grounded) {
             bool supported = fabsf(f.y-kFloor) < .02f;
@@ -273,8 +292,7 @@ bool SamuraiDuelGame::decode(arcade::Reader& r) {
         uint8_t bits = r.u8(); b.active = bits & 1; b.reflected = bits & 2;
         b.direction = bits & 4 ? 1 : -1; b.owner = (bits >> 3) & 1;
         b.x = r.i16()/32.f; b.y = r.i16()/32.f;
-        b.followup = bits & 16;
-        if (bits > 31 || (b.followup && b.reflected) || b.x < -25 || b.x > kWorldWidth+25 || b.y < 0 || b.y > kFloor ||
+        if (bits > 15 || b.x < -25 || b.x > kWorldWidth+25 || b.y < 0 || b.y > kFloor ||
             (b.active && (b.y < kCeiling-8 || (b.reflected ? b.owner != n.swordPlayer : b.owner == n.swordPlayer)))) return false;
     }
     n.burgerX = r.i16()/32.f; n.burgerY = r.i16()/32.f;
@@ -287,10 +305,46 @@ bool SamuraiDuelGame::decode(arcade::Reader& r) {
 }
 #ifdef DEBUG_REMOTE
 bool SamuraiDuelGame::debugKey(char key) {
+    // The shared lowercase 'a' is a menu press, not a PadInput attack count.
+    if (key == 'A') {
+        if(!fighters[0].down)fighters[0].attackBuffer=.09f;
+        return true;
+    }
+    // Deterministic on-device visual checks. These prepare state, never opponent AI.
+    // 1/2 = sword/gun practice, 3/4 = mutual death / match draw, 6 = approaching burst.
+    if ((key >= '1' && key <= '4') || key == '6') {
+        PadInput pads[2] = {};
+        for(int i=0;i<2;++i) {
+            pads[i].aCount=lastA_[i];pads[i].bCount=lastB_[i];
+            pads[i].a=heldA_[i];pads[i].b=heldB_[i];
+        }
+        begin(arcade::Mode::Solo,key=='2' ? 2:0);prime(pads);
+        fighters[0].x=84;fighters[1].x=230;
+        burgerActive=false;
+        if(key=='3' || key=='4') {
+            if(key=='4') { solo=false;score[0]=score[1]=kWinningScore-1; }
+            for(int owner=0;owner<2;++owner) {
+                auto& b=bullets[owner];b.active=true;b.owner=uint8_t(owner);
+                b.direction=owner==0 ? 1:-1;b.reflected=isSword(owner);
+                b.x=fighters[1-owner].x-b.direction*7;b.y=kFloor-8;
+            }
+        } else if(key=='6') {
+            boostRounds[0]=2;
+            for(int n=0;n<3;++n) {
+                auto& b=bullets[n];b.active=true;b.owner=1;b.direction=-1;
+                b.x=fighters[0].x+64+n*kShotSpeed*kBurstInterval;b.y=kFloor-8;
+            }
+        }
+        return true;
+    }
+    if (key == '5') {
+        burgerActive=true;burgerX=fighters[0].x;burgerY=fighters[0].y-9;
+        return true;
+    }
     if (key == 'c') { startRound(); return true; }
     if (key == 'h') { damage(1, 1); return true; }
     if (key == 'w' && !solo && phase_ == arcade::MatchPhase::Playing) {
-        score[0] = kWinningScore-1; finishRound(0); return true;
+        score[0] = kWinningScore-1; damage(1, 1); return true;
     }
     return false;
 }

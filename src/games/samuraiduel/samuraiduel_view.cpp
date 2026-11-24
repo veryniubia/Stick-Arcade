@@ -111,14 +111,51 @@ const char* const samurai[18]={
     "...kk..kk....", "..kkk..kkk..."};
 const char* const gunner[18]={
     "....hhhh.....", "...hhhhhh....", "...hhhhhh....", ".hhhhhhhhhhh.",
-    "..kkkkkkkkkk.", "....ssks.....", "....ssws.....", "....rrrr.....",
-    "...tttttt....", "..ttttttts...", "..ttttttts...", "...ttgttt....",
-    "...gggggg....", "...tttttt....", "...tttttt....", "...tt..tt....",
+    "..kkkkkkkkkk.", "....sskk.....", "....ssws.....", "...rrrrrr....",
+    "...tttttt....", "..ttttttts...", "..ttgtttts...", "...ttgttt....",
+    "...gggggg....", "..tttktttt...", "..ttt.kttt...", "..ttt..ttt...",
     "...kk..kk....", "..kkk..kkk..."};
 
-void drawSword(int x, int feet, int facing, float action) {
-    auto& c = display::canvas();
+// All poses, including falling, use the same transform for body, clothing and weapon.
+struct Pose {
+    int x, y, facing;
+    float sine = 0, cosine = 1;
+    int lean = 0, crouch = 0;
+    Pose(int originX,int originY,int direction) : x(originX),y(originY),facing(direction) {}
+    void rotate(float angle) { sine=sinf(angle); cosine=cosf(angle); }
+    int px(float u, float v) const {
+        return x + int(lroundf((u + lean * std::min(1.f, -v/9.f))*facing*cosine-v*sine));
+    }
+    int py(float u, float v) const {
+        return y + crouch + int(lroundf((u + lean * std::min(1.f, -v/9.f))*facing*sine+v*cosine));
+    }
+    void pixel(float u, float v, uint16_t color) const { display::canvas().drawPixel(px(u,v),py(u,v),color); }
+    void line(float u, float v, float a, float b, uint16_t color) const {
+        display::canvas().drawLine(px(u,v),py(u,v),px(a,b),py(a,b),color);
+    }
+};
+
+void drawSword(const Pose& p, float action, bool thrust) {
     using Duel = SamuraiDuelGame;
+    if (thrust && action > 0) {
+        const float age = Duel::kThrustDuration-action;
+        const float extend = age < Duel::kSlashWindup ? -2.f*(age/Duel::kSlashWindup) :
+            action > Duel::kThrustRecovery ? std::min(1.f,(age-Duel::kSlashWindup)/.045f)*5.f :
+            5.f*action/Duel::kThrustRecovery;
+        const float hand=2+extend, tip=hand+12;
+        p.line(0,-6,hand,-6,rgb(225,185,146));
+        p.line(hand,-6,tip,-6,white);
+        p.line(hand+2,-8,hand+2,-4,gold);
+        p.line(hand-2,-6,hand+1,-6,wood);
+        if (age >= Duel::kSlashWindup && action > Duel::kThrustRecovery) {
+            // A narrow pointed glint follows the real horizontal attack lane.
+            p.line(hand+4,-7,tip-1,-7,rgb(120,174,193));
+            p.line(tip-1,-7,tip+2,-6,white);
+            p.line(tip+2,-6,tip-1,-5,rgb(162,211,220));
+            p.line(hand+5,-5,tip-2,-5,rgb(78,120,145));
+        }
+        return;
+    }
     constexpr float ready = -.06f, raised = -1.76f, lowered = 1.03f;
     constexpr float sweepEnd = Duel::kSlashDuration - Duel::kSlashFollowThrough;
     const float elapsed = Duel::kSlashDuration - action;
@@ -131,37 +168,70 @@ void drawSword(int x, int feet, int facing, float action) {
         angle = ready + (lowered - ready) * (action / Duel::kSlashFollowThrough);
     }
 
-    const int pivotX = x + facing * 3, pivotY = feet - 7;
-    auto bladeX = [&](float a, float radius) { return pivotX + facing * int(lroundf(cosf(a) * radius)); };
-    auto bladeY = [&](float a, float radius) { return pivotY + int(lroundf(sinf(a) * radius * (a > 0 ? .55f : 1.f))); };
+    auto bladeX = [&](float a, float radius) { return 3 + cosf(a) * radius; };
+    auto bladeY = [&](float a, float radius) { return -6 + sinf(a) * radius * (a > 0 ? .55f : 1.f); };
     constexpr int tipRadius = 14;
     constexpr uint16_t silver = rgb(179, 197, 208), tail = rgb(100, 124, 147);
     if (elapsed > Duel::kSlashWindup && elapsed < sweepEnd) {
         const float start = std::max(raised, angle - 1.0f);
-        int prevX = bladeX(start, tipRadius), prevY = bladeY(start, tipRadius);
+        float prevX = bladeX(start, tipRadius), prevY = bladeY(start, tipRadius);
         for (int i = 1; i <= 6; ++i) {
             const float a = start + (angle - start) * i / 6.f;
-            const int px = bladeX(a, tipRadius), py = bladeY(a, tipRadius);
-            if (i == 1) c.drawPixel(prevX, prevY, tail);
-            if (i >= 3) c.drawLine(prevX, prevY, px, py, i == 6 ? white : silver);
+            const float px = bladeX(a, tipRadius), py = bladeY(a, tipRadius);
+            if (i == 1) p.pixel(prevX, prevY, tail);
+            if (i >= 3) p.line(prevX, prevY, px, py, i == 6 ? white : silver);
             prevX = px;
             prevY = py;
         }
     }
 
-    const int handX = bladeX(angle, 2), handY = bladeY(angle, 2);
-    if (action > 0) c.drawLine(x + facing, feet - 7, handX, handY, rgb(225, 185, 146));
-    c.drawLine(handX, handY, bladeX(angle, tipRadius), bladeY(angle, tipRadius), white);
-    c.drawLine(bladeX(angle - .22f, 3), bladeY(angle - .22f, 3) + 1,
+    const float handX = bladeX(angle, 2), handY = bladeY(angle, 2);
+    if (action > 0) p.line(1,-6,handX,handY,rgb(225,185,146));
+    p.line(handX, handY, bladeX(angle, tipRadius), bladeY(angle, tipRadius), white);
+    p.line(bladeX(angle - .22f, 3), bladeY(angle - .22f, 3) + 1,
                bladeX(angle + .22f, 3), bladeY(angle + .22f, 3) - 1, gold);
 }
 
-void character(int x,int feet,int facing,bool sword,int player,float walk,bool airborne,bool flash,float action=0) {
+void character(int x,int feet,int facing,bool sword,int player,float walk,bool airborne,bool flash,float action=0,
+               bool thrust=false,float shotFx=0,float parryFx=0,float downTime=-1,int fallDirection=1,float time=0) {
     auto& c=display::canvas();
+    using Duel = SamuraiDuelGame;
+    const bool down=downTime>=0;
+    Pose pose{x,feet,facing};
+    if (down) {
+        const float fall=std::min(1.f,downTime/.36f);
+        pose.rotate(fallDirection*1.48f*fall);
+        pose.crouch=-int(3*fall);
+    }
+    else {
+        pose.lean=walk!=0 ? 1:0;
+        if(sword && action>0) {
+            const float age=(thrust ? Duel::kThrustDuration:Duel::kSlashDuration)-action;
+            pose.lean=age<Duel::kSlashWindup ? -1:thrust ? 2:1;
+            pose.crouch=thrust && age>=Duel::kSlashWindup ? 1:0;
+        } else if(!sword && shotFx>.10f) pose.lean=-1;
+    }
     auto rows=sword ? samurai:gunner;
     uint16_t cloth=player ? rgb(191,72,83):rgb(77,153,173);
+    const int flutter=int(sinf(time*7+player))+(walk!=0 ? 1:0);
+    if(!down) {
+        // The same cloth motion gives both silhouettes life without idle body jitter.
+        pose.line(-2,-8,-6-flutter,-7, sword ? cloth:red);
+        pose.line(-3,-4,-5-flutter,-2,cloth);
+        if(thrust && sword && action>Duel::kThrustRecovery && action<Duel::kThrustDuration-Duel::kSlashWindup) {
+            const float age=Duel::kThrustDuration-action-Duel::kSlashWindup;
+            for(int n=0;n<4;++n) {
+                const int trail=5+n*4+int(age*13)%3;
+                const int ty=feet-1-n%2;
+                c.drawFastHLine(x-facing*trail-(facing<0 ? -3:0),ty,3,
+                    n<2 ? rgb(168,188,191):rgb(75,104,124));
+                if(n==1)c.drawPixel(x-facing*(trail+1),ty-1,white);
+            }
+        }
+    }
     for(int yy=0;yy<18;++yy) for(int xx=0;xx<13;++xx) {
-        char p=rows[yy][xx]; if(p=='.' || (sword && action>0 && yy>=9 && p=='s'))continue;
+        char p=rows[yy][xx]; if(p=='.' || (action>0 && yy>=9 && p=='s'))continue;
+        if(down && downTime>.12f && p=='h')continue;
         uint16_t col=ink;
         if(p=='h')col=sword ? (yy<3 ? rgb(236,199,125):rgb(166,115,66)):(yy<3 ? rgb(158,122,104):rgb(97,72,69));
         if(p=='s')col=rgb(225,185,146);
@@ -169,19 +239,57 @@ void character(int x,int feet,int facing,bool sword,int player,float walk,bool a
         if(p=='t')col=xx<5 ? (player ? rgb(162,46,71):rgb(29,91,166)):cloth;
         if(p=='g')col=gold;
         if(p=='r')col=red;
-        if(flash)col=white;
+        if(flash || (down && downTime<.07f))col=white;
         int shift=0;
-        if(yy>=15 && airborne)shift=xx<6 ? -1:1;
-        else if(yy>=15 && fabsf(walk)>1)shift=(int(walk/6)&1) ? (xx<6 ? -1:1):0;
-        c.drawPixel(x+screen(float((xx-6)*facing+shift)),feet+screen(float(yy-18)),col);
+        if(!down && yy>=15 && airborne)shift=xx<6 ? -1:1;
+        else if(!down && yy>=15 && fabsf(walk)>1)shift=(int(walk/6)&1) ? (xx<6 ? -1:1):0;
+        if(!down && yy>=13 && yy<16 && xx<5)shift-=flutter;
+        pose.pixel(screen(float(xx-6+shift)),screen(float(yy-18)),col);
     }
-    if(sword) {
-        c.drawLine(x-facing*4,feet-5,x-facing*8,feet-2,rgb(104,132,147));
-        drawSword(x,feet,facing,action);
+    if(down && downTime>.12f) {
+        // Both fighters drop their weapon onto the deck rather than rotating it through it.
+        Pose dropped{x+fallDirection*5,feet,facing};
+        if(sword) {
+            dropped.line(2,-1,15,-1,white);dropped.line(1,-2,1,0,gold);
+            dropped.line(-3,-1,1,-1,wood);
+        } else {
+            dropped.line(1,-1,8,-1,white);dropped.line(1,-2,4,-2,rgb(157,172,173));
+            dropped.line(1,-1,-1,0,wood);
+        }
+    } else if(sword) {
+        pose.line(-4,-5,-8,-2,rgb(104,132,147));
+        drawSword(pose,action,thrust);
     } else {
-        c.fillRect(facing>0 ? x+3:x-10,feet-8,8,2,rgb(157,172,173));
-        c.drawFastHLine(facing>0 ? x+4:x-10,feet-8,7,white);
-        c.fillRect(x+facing*4-1,feet-6,2,2,wood);
+        const float kick=shotFx>.10f ? (shotFx-.10f)/.08f:0;
+        const float lower=action>0 && shotFx<=0 ? 3*action/Duel::kShotWindup :
+                          shotFx>0 ? -kick*2:2;
+        const float hand=3-kick, tip=11-kick;
+        pose.line(0,-6,hand,-6,rgb(225,185,146));
+        pose.line(hand,-6,tip,-6+lower,rgb(170,190,199));
+        pose.line(hand+1,-7,tip,-7+lower,white);
+        pose.line(hand,-5,hand-1,-3,wood);
+        pose.line(hand+1,-6,hand+3,-6,gold); // Revolver cylinder.
+        if(!down && shotFx>.14f) {
+            pose.line(tip+1,-6+lower,tip+6,-6+lower,gold);
+            pose.line(tip+3,-8+lower,tip+3,-4+lower,gold);
+            pose.line(tip+1,-6+lower,tip+4,-6+lower,white);
+        } else if(!down && shotFx>0) {
+            const float rise=(.14f-shotFx)*17;
+            pose.pixel(tip+2,-8-rise,rgb(147,159,168));
+            pose.line(tip+3,-9-rise,tip+4,-9-rise,rgb(77,100,121));
+        }
+    }
+    if(!down && parryFx>0) {
+        const int tip=x+facing*screen(thrust ? Duel::kThrustReach:Duel::kSlashReach),y=feet-6;
+        const int r=parryFx>.10f ? 4:2;
+        c.drawFastHLine(tip-r,y,r*2+1,gold);c.drawFastVLine(tip,y-r,r*2+1,gold);
+        c.drawPixel(tip,y,white);
+    }
+    if(down && downTime>.12f) {
+        const int hx=x+fallDirection*(10+int(std::min(.4f,downTime)*12));
+        const int hy=feet-1-int(std::max(0.f,.32f-downTime)*18);
+        c.drawFastHLine(hx-3,hy,7,sword ? gold:rgb(158,122,104));
+        c.drawFastHLine(hx-1,hy-1,3,sword ? gold:rgb(158,122,104));
     }
 }
 void spark(int x,int y,uint16_t col,int frame) {
@@ -204,21 +312,14 @@ void SamuraiDuelGame::draw(int local,const arcade::DrawCtx& ctx) {
     for(int i=0;i<2;++i) {
         const auto& f=fighters[i];int x=screen(f.x),y=screen(f.y);
         if(f.grounded)c.fillRect(x-4,y-1,9,1,ink);
-        bool blink=phase_!=arcade::MatchPhase::Playing && roundWinner>=0 && roundWinner!=i && spark>0;
-        // Let the blade finish its movement after a point freezes the fighters.
-        const float slash = phase_ == arcade::MatchPhase::Playing ? f.action :
-                            (spark > 0 ? std::max(0.f, f.action - (.20f - spark)) : 0.f);
-        character(x,y,f.facing,isSword(i),i,fabsf(f.vx)>3 ? float(ctx.nowMs)/35:0,!f.grounded,blink,slash);
-        if (boostRounds[i]) ui::drawBurger(std::max(5, std::min(234, x)), y-26);
-        if(i==local) {
+        character(x,y,f.facing,isSword(i),i,fabsf(f.vx)>3 ? float(ctx.nowMs)/35:0,!f.grounded,false,
+                  f.action,f.thrust,f.shotFx,f.parryFx,f.down ? f.downTime:-1,f.fallDirection,ctx.nowMs*.001f);
+        if (boostRounds[i] && !f.down) ui::drawBurger(std::max(5, std::min(234, x)), y-26);
+        if(i==local && !f.down) {
             c.fillRect(x-2,y-18,5,1,white);c.fillRect(x-1,y-17,3,1,white);c.drawPixel(x,y-16,white);
         }
-        if(!isSword(i) && f.action>0) {
-            int muzzle=x+f.facing*11;
-            c.fillRect(muzzle-1,y-8,3,3,gold);c.drawPixel(muzzle+f.facing*2,y-7,white);
-        }
-        if(f.cooldown>0) {
-            float total=isSword(i) ? kSlashDuration:kShotCooldown;
+        if(f.cooldown>0 && !f.down) {
+            float total=isSword(i) ? attackDuration(i):kShotCooldown;
             c.fillRect(x-5,y+2,10,1,ink);
             c.fillRect(x-5,y+2,int(10*(1-f.cooldown/total)),1,isSword(i)?cyan:gold);
         }
@@ -257,10 +358,15 @@ void SamuraiDuelGame::draw(int local,const arcade::DrawCtx& ctx) {
     if (phase_ == arcade::MatchPhase::MatchEnd) {
         ui::matchResult(winner, local, 120, 40, 3);
     } else if (phase_ == arcade::MatchPhase::RoundEnd) {
-        if (roundWinner < 0) {
+        if (!fighters[0].down && !fighters[1].down) {
             ui::shadowText("RESET", 120, 40, 3, white);
-        } else if (phaseTimer > kRoundPause - ui::kHitNoticeSeconds) {
-            ui::hitNotice(roundWinner != local, 120, 40, 3);
+        } else if (fighters[0].down && fighters[1].down) {
+            if (std::min(fighters[0].downTime,fighters[1].downTime)<ui::kHitNoticeSeconds)
+                ui::shadowText("DOUBLE KO",120,40,2,gold);
+        } else {
+            const int victim=fighters[0].down ? 0:1;
+            if(fighters[victim].downTime<ui::kHitNoticeSeconds)
+                ui::hitNotice(victim==local,120,40,3);
         }
     }
 }
@@ -270,7 +376,7 @@ void SamuraiDuelGame::sfx(uint32_t ev) {
         parry[]={{1900,18},{2600,25},{1400,25}},hurt[]={{180,30},{90,60}},
         jump[]={{350,12},{550,16}},finish[]={{660,70},{880,70},{1320,130}},
         lose[]={{440,70},{330,80},{220,130}},round[]={{660,40},{990,70}};
-    if(ev&Finish)sound::play(winner==viewLocal_ ? finish:lose,3,5);
+    if(ev&Finish)sound::play(winner<0 ? round:winner==viewLocal_ ? finish:lose,3,5);
     else if(ev&Round)sound::play(round,2,4);
     else if(ev&Pickup) {
         static const Note pickup[]={{660,25},{990,45}};

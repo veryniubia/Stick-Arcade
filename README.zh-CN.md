@@ -49,6 +49,8 @@ python -m venv .venv
 
 ## 测试
 
+电脑交互测试可使用 [StickS3 桌面模拟器](simulator/README.zh-CN.md)：运行 `python simulator/run.py`，通过键盘和面板操作完整启动器、设置和所有游戏，支持模拟 IMU、Joystick2、暂停逐帧和本机双设备联机。
+
 主机端测试需要 C++17 编译器（`g++` 或 Windows 上的 Visual Studio C++）：
 
 ```powershell

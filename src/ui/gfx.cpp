@@ -55,6 +55,13 @@ void dim(int x, int y, int w, int h) {
 
 void drawBitmap(const arcade::Bitmap& bmp, int x, int y) {
     auto& c = display::canvas();
+    // M5GFX expands packed palette rows directly into the existing RGB565 canvas.
+    // Odd-width artwork in our format carries its last nibble across row boundaries.
+    if (!bmp.rle && bmp.colors == 16 && bmp.w % 2 == 0 && bmp.size >= size_t(bmp.w / 2) * bmp.h) {
+        c.pushImage(x, y, bmp.w, bmp.h, bmp.data, lgfx::palette_4bit,
+                    reinterpret_cast<const lgfx::rgb565_t*>(bmp.palette));
+        return;
+    }
     arcade::forEachRun(bmp, [&](int rx, int ry, int len, uint8_t color) {
         c.fillRect(x + rx, y + ry, len, 1, bmp.palette[color]);
     });
