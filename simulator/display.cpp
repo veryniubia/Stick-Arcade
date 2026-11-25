@@ -8,7 +8,12 @@ M5Canvas& canvas(){return cv;}
 int width(){return portrait?135:240;} int height(){return portrait?240:135;}
 void setPortrait(bool p){if(p==portrait)return;portrait=p;M5.Imu.portrait=p;M5.Display.setRotation(p?0:1);cv.createSprite(width(),height());}
 void setTargetFps(int f){fps=f>0?f:60;}
+#ifdef __ANDROID__
+int targetFps(){return fps;}
+void present(){}
+#else
 void present(){sim::present();sim::timeUs+=1000000/fps;}
+#endif
 const void* lastFrame(){return cv.getBuffer();}
 bool dmaActive(){return false;} uint32_t pushUs(){return 0;} uint32_t waitUs(){return 0;}
 }

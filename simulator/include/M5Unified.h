@@ -67,7 +67,8 @@ namespace lgfx { using LovyanGFX=M5Canvas; }
 namespace m5 { struct IMU_Class { enum {sensor_mask_accel=1,sensor_mask_gyro=2}; }; }
 struct SimButton {
     bool held=false,pressed=false;
-    void update(bool v){pressed=v&&!held;held=v;}
+    bool pending=false;
+    void update(bool v){pressed=pending||(v&&!held);held=v;pending=false;}
     bool isPressed() const{return held;} bool wasPressed() const{return pressed;}
 };
 struct SimDisplay {
@@ -82,6 +83,10 @@ struct SimImu {
     float previousYaw=0;
     uint32_t previousUs=0;
     bool isEnabled() const{return true;}
+#ifdef __ANDROID__
+    int fresh=0;
+    int update(){int mask=fresh;fresh=0;return mask;}
+#else
     int update(){
         float t=sim::controls.tilt*.01745329252f,p=sim::controls.pitch*.01745329252f;
         sample.accel={cosf(t)*cosf(p),sinf(t)*cosf(p),sinf(p)};
@@ -96,6 +101,7 @@ struct SimImu {
         if(sim::shakeAt){uint32_t age=millis()-sim::shakeAt;if(age<50||(age>=180&&age<230)){sample.accel.x*=5;sample.accel.y*=5;sample.accel.z*=5;}if(age>250)sim::shakeAt=0;}
         sample.usec=micros();return 3;
     }
+#endif
     const Sample& getImuData() const{return sample;}
 };
 struct SimI2C {
@@ -113,7 +119,10 @@ struct SimSpeaker {
     void setChannelVolume(int ch,unsigned v){if(ch>=0&&ch<3)channelVolume[ch]=v;}
     void playRaw(const uint8_t* p,unsigned n,unsigned rate,bool,int,int ch,bool){sim::audioSample(p,n,rate,volume*(ch<3?channelVolume[ch]:255)/255,ch);}
 };
-struct SimPower {void setExtOutput(bool){} int getBatteryLevel(){return 100;} int getVBUSVoltage(){return 5000;}};
+struct SimPower {
+    int level=100, usbMv=5000;
+    void setExtOutput(bool){} int getBatteryLevel(){return level;} int getVBUSVoltage(){return usbMv;}
+};
 struct SimM5 {
     struct Config {bool pmic_button=false;};
     SimDisplay Display;SimButton BtnA,BtnB;SimImu Imu;SimI2C Ex_I2C;SimPower Power;SimSpeaker Speaker;

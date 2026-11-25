@@ -87,6 +87,11 @@ static void testShake() {
 // ---- settings ----
 
 static void testSettingsCodec() {
+    // Captured format-1 layout, independent of the current encoder.
+    const uint8_t oldBlob[] = {1,4,1,3,0x85,0xff,0,0xbe};
+    settings::Data old;
+    CHECK(settings::decode(oldBlob, sizeof(oldBlob), old));
+    CHECK(old.volume==4 && old.bright==1 && old.aim==3 && old.tiltOffsetX10==-123);
     settings::Data a;
     a.volume = 4;
     a.bright = 1;

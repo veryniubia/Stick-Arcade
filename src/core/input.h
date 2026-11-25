@@ -7,6 +7,7 @@ namespace input {
 
 void begin();
 void update();
+void updateMotion(uint32_t sampleMs);  // also accepts asynchronous IMU samples between display frames
 
 // Device tilt in degrees: elevation of the screen's right edge above the horizontal plane, filtered,
 // relative to the calibrated level pose.
@@ -32,6 +33,10 @@ float calibrationProgress();
 void beginLook(float pitchGainCenter, float pitchGainEdge);
 void endLook();
 float lookYawDeg();    // positive = right
+#ifdef __ANDROID__
+void headingSample(float degrees, uint32_t ms);
+bool hasHeading();
+#endif
 float lookPitchDeg();  // positive = up
 
 }  // namespace input

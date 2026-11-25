@@ -4,6 +4,9 @@
 #include <math.h>
 
 #include "core/gyro_look.h"
+#ifdef __ANDROID__
+#include "core/heading_look.h"
+#endif
 #include "core/joystick.h"
 #include "core/shake.h"
 #include "core/portrait_tilt.h"
@@ -15,6 +18,10 @@ constexpr float kImuAimSign = 1.0f;
 
 arcade::PortraitTilt g_portraitTilt;
 arcade::GyroLook g_look;
+#ifdef __ANDROID__
+arcade::HeadingLook g_heading;
+bool g_turning = false;
+#endif
 bool g_lookOn = false;
 uint32_t g_lookUs = 0;
 float g_tilt = 0.0f;  // filtered device tilt in degrees
@@ -42,6 +49,8 @@ void begin() {
     g_imuOk = M5.Imu.isEnabled();
     g_primed = false;
     g_portraitTilt.reset();
+    g_shake.reset();
+    g_shaken = false;
 }
 
 void update() {
@@ -49,20 +58,33 @@ void update() {
     if (M5.BtnA.wasPressed()) ++g_aCount;
     if (bPressed) ++g_bCount;
     joystick::update();
+    updateMotion(millis());
+}
+
+void updateMotion(uint32_t sampleMs) {
     if (!g_imuOk) return;
     const auto fresh = M5.Imu.update();
     if (!fresh) return;
     const auto& sample = M5.Imu.getImuData();
     const float ax = sample.accel.x, ay = sample.accel.y, az = sample.accel.z;
     if (g_lookOn && (fresh & m5::IMU_Class::sensor_mask_gyro)) {
+#ifdef __ANDROID__
+        const bool calibrating = g_look.calibrationProgress() < 1;
+        const float magnitude = sqrtf(ax*ax + ay*ay + az*az);
+        const float verticalRate = ax*sample.gyro.x + ay*sample.gyro.y + az*sample.gyro.z;
+        g_turning = magnitude > .5f && fabsf(verticalRate) > .3f * magnitude;
+#endif
         g_look.update(ax, ay, az, sample.gyro.x, sample.gyro.y, sample.gyro.z,
                       (sample.usec - g_lookUs) * 1e-6f);
+#ifdef __ANDROID__
+        if (calibrating && g_look.calibrationProgress() >= 1) g_heading.center(sampleMs);
+#endif
         g_lookUs = sample.usec;
     }
 
     if (!(fresh & m5::IMU_Class::sensor_mask_accel)) return;
     const float magnitude = sqrtf(ax * ax + ay * ay + az * az);
-    if (g_shake.update(millis(), fabsf(magnitude - 1.0f))) {
+    if (g_shake.update(sampleMs, fabsf(magnitude - 1.0f))) {
         g_shaken = true;
 #ifdef DEBUG_REMOTE
         Serial.println("SHAKE");
@@ -108,6 +130,10 @@ bool shaken() {
 }
 
 void beginLook(float pitchGainCenter, float pitchGainEdge) {
+#ifdef __ANDROID__
+    g_heading = {};
+    g_turning = false;
+#endif
     g_look.reset();
     g_look.configurePitch(pitchGainCenter, pitchGainEdge);
     g_lookUs = micros();
@@ -117,7 +143,18 @@ void beginLook(float pitchGainCenter, float pitchGainEdge) {
 void calibrateLook() { g_look.beginCalibration(); }
 float calibrationProgress() { return g_look.calibrationProgress(); }
 void endLook() { g_lookOn = false; }
-float lookYawDeg() { return g_look.yaw(); }
+#ifdef __ANDROID__
+void headingSample(float degrees, uint32_t ms) {
+    if (g_lookOn) g_heading.sample(degrees, ms, g_turning);
+}
+bool hasHeading() { return g_heading.active(); }
+#endif
+float lookYawDeg() {
+#ifdef __ANDROID__
+    if (g_heading.active()) return g_heading.yaw();
+#endif
+    return g_look.yaw();
+}
 float lookPitchDeg() { return g_look.pitch(); }
 
 }  // namespace input

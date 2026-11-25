@@ -791,13 +791,24 @@ static void burgers() {
         CHECK((g.players[victim].hp==0)==(mode==0 || mode==4));
         if(mode==0 || mode==4) CHECK(g.score[1-victim]==1);
     }
-    // Respawning clears unclaimed, held and in-flight burgers and restarts the random wait.
+    // A direct throw along the open centre lane kills a stationary target on fuse expiry.
+    g=duel(); openGate(g); p[0]=p[1]=PadInput();
+    g.burger.owner=0; g.burger.state=G::BurgerState::Held;
+    fire(p[0]); g.step(tick,p);
+    CHECK(g.burger.state==G::BurgerState::Flying);
+    run(g,p,121);
+    CHECK(g.burger.state==G::BurgerState::Blast && g.players[1].hp==0 && g.score[0]==1);
+    // Respawning refreshes pickups, but a released burger still detonates.
     for (int state=1;state<=3;++state) {
         g=duel(); g.burger.state=static_cast<G::BurgerState>(state);
         g.burger.timer=state==3?1.f:0.f;g.burger.y=2;
         g.players[1].dead=.001f;g.players[1].hp=0;
         g.step(tick,p);
-        CHECK(g.burger.state==G::BurgerState::Waiting && g.burger.timer>7.9f && g.burger.timer<=15);
+        if (state==3) {
+            CHECK(g.burger.state==G::BurgerState::Flying);
+            run(g,p,60);
+            CHECK(g.burger.state==G::BurgerState::Blast);
+        } else CHECK(g.burger.state==G::BurgerState::Waiting && g.burger.timer>7.9f && g.burger.timer<=15);
     }
     // Closing gates eject an overlapping grenade rather than trapping it inside geometry.
     g=duel();g.burger.state=G::BurgerState::Flying;g.burger.timer=1;

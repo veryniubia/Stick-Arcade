@@ -18,6 +18,7 @@ TESTS = {
     'samuraiduel_test': ['src/games/samuraiduel/samuraiduel.cpp'],
     'middiff_test': ['src/games/middiff/middiff.cpp'],
     'input_test': [],
+    'radio_test': [],
     'net_test': ['src/net/net_session.cpp', 'src/core/game_instance.cpp',
                  'src/games/throwhalla/throwhalla.cpp', 'src/games/throwhalla/game.cpp',
                  'src/games/bumperduel/bumperduel.cpp',

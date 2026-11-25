@@ -10,6 +10,13 @@ void begin(const registry::GameEntry& entry);
 bool update(float dt);  // returns true when the user should be sent back to the launcher
 void draw();
 void end();
+#ifdef __ANDROID__
+const char* gameName();
+int rttMs();
+const char* stateText();
+const char* roleText();
+bool needsJoystick();
+#endif
 
 #ifdef DEBUG_REMOTE
 void debugLine();  // prints one status line on the serial port

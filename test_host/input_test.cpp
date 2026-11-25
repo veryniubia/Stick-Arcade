@@ -1,5 +1,6 @@
 // Host-side tests for the hardware independent input helpers: gyro look, stick mapping and the stick press history.
 #include "core/gyro_look.h"
+#include "core/heading_look.h"
 #include "core/stick_history.h"
 #include "core/stick_map.h"
 #include <cmath>
@@ -17,6 +18,36 @@ static void gyroLook() {
         for (int i = 0; i < frames; ++i) l.update(ax, ay, az, gx, gy, gz, tick);
     };
     GyroLook l;
+    arcade::HeadingLook heading;
+    heading.sample(179.f, 0, false);
+    heading.center(10);
+    CHECK(heading.active());
+    for (int i=0; i<6000; ++i) heading.sample(179.f, 20+i*10, true);
+    CHECK(heading.yaw()==0); // even a falsely detected gyro turn cannot accumulate
+    for (int i=0; i<100; ++i) heading.sample(-171.f, 60100+i*10, true);
+    CHECK(std::fabs(heading.yaw()-70.f/3)<.01f);
+    for (int i=0; i<500; ++i) heading.sample(-171.f-(i+1)*.02f, 61100+i*10, true);
+    for (int i=0; i<100; ++i) heading.sample(179.f, 66100+i*10, false);
+    CHECK(std::fabs(heading.yaw())<.01f);
+    heading.center(68000);
+    CHECK(!heading.active()); // stale sensor at calibration uses the gyro fallback
+    // Same physical heading after a quick turn and a slow return, even with
+    // a nonzero sensor offset. Exercise both directions at phone sample rate.
+    for (int sign = -1; sign <= 1; sign += 2) {
+        GyroLook slow;
+        auto samples = [&](float speed, int count) {
+            for (int i = 0; i < count; ++i)
+                slow.update(1, 0, 0, 6 + sign * speed, 0, 0, .01f);
+        };
+        slow.beginCalibration();
+        samples(0, 125);
+        samples(-10, 100);
+        CHECK(std::fabs(slow.yaw() - sign * 70.f / 3) < .01f);
+        samples(2, 500);
+        CHECK(std::fabs(slow.yaw()) < .01f);
+        samples(0, 1000);
+        CHECK(std::fabs(slow.yaw()) < .01f);
+    }
     l.reset();
     // Holding still: no drift, even with a small constant bias that the estimator absorbs.
     turn(l, 1, 0, 0, 0.8f, -0.6f, 0.5f, 240);

@@ -16,7 +16,7 @@
 ## 硬件
 
 - M5Stack StickS3 和可传输数据的 USB-C 线。
-- 双人联机需要两台安装了兼容固件和游戏协议版本的 StickS3。
+- 双机可以使用两台协议兼容的 StickS3，也可以开启 PHONE LINK，用 Android 手机作为第二名玩家。APK、热点连接、签名和真机验收见[手机调试说明](android/README.md)。
 - MidDiff 需要 [M5Stack Unit Joystick2](https://shop.m5stack.com/products/i2c-joystick-2-unit-stm32g030) 接在 Grove 接口（I2C 地址 `0x63`），横屏握持时摇杆在左手边。仅在选中需要摇杆的游戏时才打开 Grove 的 5 V 输出。
 - 当前提供 Windows 开发流程；固件使用 PlatformIO、ESP32 Arduino 平台和 M5Unified 构建。
 

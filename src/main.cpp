@@ -15,6 +15,7 @@
 #include "core/sound.h"
 #include "games/registry.h"
 #include "net/net_espnow.h"
+#include "net/radio.h"
 #include "ui/launcher.h"
 #include "ui/play.h"
 #include "ui/settings_page.h"
@@ -204,6 +205,17 @@ void debugShot() {}
 
 }  // namespace
 
+#ifdef __ANDROID__
+void suspendGame() {
+    if (g_screen == Screen::Play) {
+        play::end();
+        goLauncher();
+    }
+    input::begin();
+    g_lastMs = millis();
+}
+#endif
+
 void setup() {
     auto cfg = M5.config();
     cfg.pmic_button = false;  // polling the power key over I2C costs 0.8 ms per frame and the platform does not use it
@@ -231,6 +243,7 @@ void loop() {
 #ifdef DEBUG_REMOTE
     const uint32_t tLoop0 = perf::us();
 #endif
+    radio::tick();
     M5.update();
     input::update();
     sound::update();

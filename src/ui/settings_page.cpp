@@ -10,6 +10,7 @@
 #include "core/settings.h"
 #include "core/sound.h"
 #include "ui/gfx.h"
+#include "net/radio.h"
 
 namespace settings_page {
 
@@ -17,7 +18,15 @@ namespace {
 
 using platform::rgb;
 
-enum Row { kSound, kBright, kAim, kCalibrate, kBattery, kVersion, kReset, kBack, kRowCount };
+enum Row { kSound, kBright, kAim, kCalibrate,
+#ifdef ESP_PLATFORM
+    kPhone,
+#endif
+    kBattery, kVersion, kReset, kBack, kRowCount };
+#ifdef ESP_PLATFORM
+bool g_phonePage = false;
+bool g_apError = false;
+#endif
 
 constexpr int kVisible = 5;
 constexpr int kRowH = 20;
@@ -49,6 +58,9 @@ void valueText(int row, char* out, size_t n) {
         case kBright: snprintf(out, n, "%d/%d", s.bright + 1, settings::kBrightLevels); break;
         case kAim: snprintf(out, n, "%.1f", settings::kAimValue[s.aim]); break;
         case kCalibrate: snprintf(out, n, "%+.1f", s.tiltOffsetX10 / 10.0f); break;
+#ifdef ESP_PLATFORM
+        case kPhone: snprintf(out, n, "%s", radio::phoneMode() ? "ON" : "OFF"); break;
+#endif
         case kBattery: {
             const int level = M5.Power.getBatteryLevel();
             const bool usb = M5.Power.getVBUSVoltage() > 4000;
@@ -62,7 +74,11 @@ void valueText(int row, char* out, size_t n) {
 }
 
 const char* labelOf(int row) {
-    static const char* kLabels[kRowCount] = {"SOUND", "BRIGHT", "AIM", "CALIBRATE", "BATTERY", "VERSION", "RESET", "BACK"};
+    static const char* kLabels[kRowCount] = {"SOUND", "BRIGHT", "AIM", "CALIBRATE",
+#ifdef ESP_PLATFORM
+        "PHONE LINK",
+#endif
+        "BATTERY", "VERSION", "RESET", "BACK"};
     return kLabels[row];
 }
 
@@ -70,6 +86,9 @@ const char* actionOf(int row) {
     switch (row) {
         case kSound: case kBright: case kAim: return "CHANGE";
         case kCalibrate: return "SET";
+#ifdef ESP_PLATFORM
+        case kPhone: return "OPEN";
+#endif
         case kReset: return "RESET";
         case kBack: return "BACK";
         default: return nullptr;
@@ -80,11 +99,24 @@ const char* actionOf(int row) {
 
 void begin() {
     g_sel = 0;
+#ifdef ESP_PLATFORM
+    g_phonePage = g_apError = false;
+#endif
     g_calibrating = false;
     g_noteUntil = 0;
 }
 
 bool update(float dt) {
+#ifdef ESP_PLATFORM
+    if (g_phonePage) {
+        if (input::bPressed()) g_phonePage = false;
+        else if (input::aPressed()) {
+            g_apError = !radio::setPhoneMode(!radio::phoneMode());
+            sound::playUi(g_apError ? sound::Ui::Denied : sound::Ui::Select);
+        }
+        return false;
+    }
+#endif
     if (g_calibrating) {
         g_calibT += dt;
         if (g_calibT > kCalibWarmupSec) {
@@ -135,6 +167,9 @@ bool update(float dt) {
             g_calibN = 0;
             sound::playUi(sound::Ui::Move);
             break;
+#ifdef ESP_PLATFORM
+        case kPhone: g_phonePage = true; break;
+#endif
         case kReset:
             settings::resetDefaults();
             sound::playUi(sound::Ui::Select);
@@ -153,6 +188,20 @@ bool update(float dt) {
 void draw() {
     auto& c = display::canvas();
     c.fillRect(0, 0, platform::kScreenW, platform::kHintY, rgb(20, 22, 36));
+#ifdef ESP_PLATFORM
+    if (g_phonePage) {
+        ui::shadowText("PHONE LINK", 120, 12, 2, ui::yellow());
+        ui::shadowText(g_apError ? "HOTSPOT START FAILED" : radio::phoneStatus(), 120, 34, 1, ui::kWhite);
+        if (radio::phoneMode()) {
+            ui::shadowText(radio::ssid(), 120, 58, 2, ui::kWhite);
+            char line[24];
+            snprintf(line, sizeof(line), "KEY %s", radio::password());
+            ui::shadowText(line, 120, 90, 2, ui::green());
+        }
+        ui::hintBar("BACK", radio::phoneMode() ? "TURN OFF" : "TURN ON");
+        return;
+    }
+#endif
     const bool noteOn = !g_calibrating && millis() < g_noteUntil;
     ui::shadowText(noteOn ? g_note : "SETTINGS", platform::kScreenW / 2, 7, 1, noteOn ? ui::green() : ui::yellow());
 

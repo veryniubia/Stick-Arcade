@@ -685,43 +685,46 @@ void drawFigure(const Cam& cam, const G& g, int idx, uint32_t ms) {
 // Hand-pixelled at 2x scale. Each row is a palette-indexed silhouette; spaces show the world.
 void drawGun(const G::Player& me, uint32_t ms, bool moving) {
     static const char* const art[] = {
-        "",
-        "",
-        "                  ....",
-        "  .              .aaaa.      .",
-        "...a..          ..abbba.     ....",
-        ".aabba..        ..aaaaa..   .....",
-        " ...abbba..      .aaaaaabb..  ...",
-        " .....aabbb...   .aaaaaaaabbb....",
-        "   ......aabbb......aaaaaaaaabbb......",
-        "      ......aabbb.........aaaaaabb........",
-        "        ......aaabb..........aaaaaaaa......",
-        "           ......aaaa...........aaaa...ghg..",
-        "             ..d...aaaaa..............ghggg..",
-        "              .cddd...a....... ......ahgggg..",
-        "              ..cdddddd.......... ...aggggg..",
-        "               .ccccddddd.............aggg...",
-        "               ....ccccddddd.d.........aa...    .",
-        "                 ....b..cccdddddd...............d...",
-        "                   ...bbbcccccddddddd.....dddddddddd....",
-        "                     .bbbb..cccecddddd.ddddddddddedddddd....",
-        "                     ..bbb.....ceeeccccccccdddeeeeeeeeeec...",
-        "                     .....b.....ceeeeeeeeeeeeee.eeeeeeeec...",
-        "                      ...........ceeeeeeeeeee...ff..eeeec...",
-        "                      .............eeeeeeee...ff...cccccc...",
-        "                       ...... ........cccccec......cccccc...",
-        "                        ...... ...........cccc....cccccc....",
-        "                         ...    .............ccccccccccc....",
-        "                          .         .   .......ccccccccc....",
-        "                                           .......cccccc....",
-        "                                              ......c.......",
-        "                                                 ...........",
+        "              ...",
+        "            ..cc...",
+        "            .ccc.dd...",
+        "           .ccc.cccdddd...",
+        "....       .ccc.cccccccaddd...",
+        ".aaa..     .ccc.cccccccacccddd....",
+        " .aabb..    .c.eecccccacccccccdddc......",
+        " .aaaabb..  ....ceecccaccccccccccd.aaaaa.",
+        "  ..aaaabb... ....eeeaecccccccccc.aa...aa.",
+        "    ..aaaabba.. .aa.eaeeeecccccc.aa.hhh.aa.",
+        "      ..aaaabbb.aa.  eeeeeeeeccc.a.hgggg.a.",
+        "        ..aaaaa..a.     eeeeeeee.a.ggggg.a.",
+        "         ...aaaaa.....    .eeeee.a.ggggg.a.",
+        "          .c..aaaaabba..    .eee.aa.ggg.aa.",
+        "          .eec..aaaaabbb..b.aa..e.aa...aa.",
+        "         ...eedc..aaaaabbbb.aa. ...aaaaa.",
+        "        .ff.eeeddc..aaaaabb..a.   ......",
+        "       .ffff.eeeeddc..aaaaabb..bbb",
+        "      .ff.....eeeeeddc..aaaaabbbbbbb",
+        "      .f.ijjjj.eeeeeeddc..aaaaabbbbbb..",
+        "       .ijjjjjj.eeeeeecddc..aaaaabb..a.",
+        "      .ijjjjjjii.eeeeeeecddc..aaaaa.aa.",
+        "     .ijjjjiiiiii.eeeeeeeecddc...aa.aa.",
+        "    .ijjjiiiiiiiii.eeeeeeeeecddcc...a....",
+        "   .jjjiiiiiiiiiii...eeeeeeeeeeddcc..ccee..",
+        "  .jjiiiiiiiiiiiii.  .eeeeeeeeeeeddccccccce..",
+        " .jjiiiiiiiiiiiii.    ..eeeeeeeeeeeddccccccce..",
+        ".jiiiiiiiiiiiiiii.      .eeeeeeeeeeeeddcccccccc..",
+        "jiiiiiiiiiiiiiii.        .eeeeeeeeeeeeedeeccccccc..",
+        ".iiiiiiiiiiiiiii.         .eeeeeeeeeeeeeeeeecccccccc.",
+        ".iiiiiiiiiiiiii.          .eeeeeeeeeeeeeeeeeeeeccccccc.",
+        ".iiiiiiiiiiiiii.           .eeeeeeeeeeeeeeeeeeeeeeeeee.",
+        "...............             ...........................",
     };
-    // '.' is the outline, a..h are the flat steel, stock and lens colours.
+    // Outline, steel, olive stock, glove, glass, sleeve.
     static constexpr uint16_t colors[] = {
-        rgb(23, 28, 32), rgb(66, 78, 85), rgb(151, 164, 159),
-        rgb(122, 163, 66), rgb(199, 219, 117), rgb(82, 119, 58),
-        rgb(79, 90, 69), rgb(57, 135, 142), rgb(181, 235, 211)
+        rgb(22, 25, 24), rgb(53, 55, 50), rgb(98, 101, 89),
+        rgb(91, 94, 55), rgb(132, 130, 79), rgb(62, 68, 41),
+        rgb(92, 88, 75), rgb(26, 43, 44), rgb(77, 105, 99),
+        rgb(56, 61, 68), rgb(80, 85, 89)
     };
     const float kick = std::min(1.f, me.flash / 0.12f);
     const int x = 134 + roundi(kick * 5);
@@ -747,11 +750,6 @@ void drawGun(const G::Player& me, uint32_t ms, bool moving) {
         }
     }
     auto& c = display::canvas();
-    const bool cycling = me.cooldown > .25f && me.cooldown < .9f;
-    const int bx = x + (cycling ? 88 : 84), by = y + (cycling ? 32 : 43);
-    c.drawLine(x + 76, y + 37, bx, by, colors[0]);
-    c.fillCircle(bx, by, 3, colors[0]);
-    c.drawPixel(bx - 1, by - 1, colors[2]);
     if (me.flash > .07f) {
         const int mx = x + 1, my = y + 10;
         c.drawLine(mx - 9, my - 5, mx + 2, my + 1, gold);
@@ -866,9 +864,10 @@ void burgerHand(int x, int y, int team, bool open) {
 
 void drawBurger(const Cam& cam, const G& g, uint32_t ms) {
     const auto& b=g.burger;
-    if (!g.segmentClear(cam.x,cam.y,cam.z,b.x,b.y,b.z)) return;
+    const float effectY=b.y+(b.state==G::BurgerState::Blast ? .65f : 0.f);
+    if (!g.segmentClear(cam.x,cam.y,cam.z,b.x,effectY,b.z)) return;
     float x,y,d;
-    if (!project(cam,b.x,b.y,b.z,x,y,d)) return;
+    if (!project(cam,b.x,effectY,b.z,x,y,d)) return;
     auto& c=display::canvas();
     if (b.state==G::BurgerState::Blast) {
         const float age=.45f-b.timer, progress=std::max(0.f,age/.45f);
@@ -1003,6 +1002,9 @@ void MidDiffGame::draw(int local, const arcade::DrawCtx& ctx) {
         drawCrosshair(me, scoped);
     }
 
+    if (burger.state==BurgerState::Blast && burger.owner==local)
+        ui::shadowText("BOOM",120,94,1,gold);
+
     // Damage flash around the screen edge.
     if (me.hurt > 0 && me.dead <= 0) {
         const int t = 2 + static_cast<int>(me.hurt * 20);
@@ -1071,6 +1073,11 @@ void MidDiffGame::draw(int local, const arcade::DrawCtx& ctx) {
 }
 
 void MidDiffGame::sfx(uint32_t ev) {
+    // The client gets the blast state in snapshots even though the boom
+    // event is above the eight transmitted sound bits.
+    const bool blasting = burger.state==BurgerState::Blast;
+    if (blasting && !heardBlast_) ev |= BurgerBoom;
+    heardBlast_ = blasting;
     using sound::Note;
     static const uint8_t shot[] = {
 #include "awp_pcm.inc"

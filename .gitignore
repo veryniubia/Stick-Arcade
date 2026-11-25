@@ -4,3 +4,5 @@ test_host/*.obj
 __pycache__/
 .venv/
 /out/
+*.keystore
+*.jks

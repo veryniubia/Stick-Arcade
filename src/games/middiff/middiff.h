@@ -147,6 +147,7 @@ public:
     static bool blockedAt(float x, float z, float margin);
 
 private:
+    bool heardBlast_ = false;
     arcade::Mode mode_ = arcade::Mode::Solo;
     uint8_t lastA_[2] = {}, lastJump_[2] = {};
     float fireBuffer_[2] = {};

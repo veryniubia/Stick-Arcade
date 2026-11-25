@@ -19,6 +19,9 @@ public:
 
     static constexpr float kStillDps = 3.0f;       // below this the device counts as resting (hands tremble a little)
     static constexpr float kStillHold = 0.3f;      // seconds of rest before the bias estimate follows the gyro
+    // After bias calibration, protect deliberate slow pans from the wider
+    // three-axis tremor gate. Allow small stationary bias changes (~1 deg/s).
+    static constexpr float kStillYawDps = 1.25f;
     static constexpr float kDeadDps = 0.4f;        // residual rate below this is ignored
 
     static constexpr float kDeviceYawAtLimit = 30.0f;
@@ -99,7 +102,9 @@ public:
         }
 
         const float rx = gx - bx_, ry = gy - by_, rz = gz - bz_;
-        const bool resting = rx * rx + ry * ry + rz * rz < kStillDps * kStillDps && fabsf(mag - 1.0f) < 0.08f;
+        const float up = rx * ux_ + ry * uy_ + rz * uz_;
+        const bool resting = rx * rx + ry * ry + rz * rz < kStillDps * kStillDps &&
+                             fabsf(mag - 1.0f) < 0.08f && (!settled_ || fabsf(up) < kStillYawDps);
         if (resting) {
             stillTime_ += dt;
             if (stillTime_ >= kStillHold) {
@@ -116,7 +121,6 @@ public:
         stillTime_ = 0.0f;
 
         // Turning about the vertical axis is yaw whatever way the device is held; gravity gives the axis.
-        const float up = rx * ux_ + ry * uy_ + rz * uz_;
         if (fabsf(up) > kDeadDps) deviceYaw_ -= up * kYawSign * dt;
     }
 

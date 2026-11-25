@@ -130,6 +130,7 @@ float MidDiffGame::random01() {
 void MidDiffGame::begin(arcade::Mode mode, uint32_t s) {
     const bool rematch = mode == arcade::Mode::Host && mode_ == arcade::Mode::Host && phase_ == arcade::MatchPhase::MatchEnd;
     mode_ = mode;
+    heardBlast_ = false;
     solo = mode == arcade::Mode::Solo;
     seed = s;
     rng_ = s ? s : 1;
@@ -161,9 +162,10 @@ void MidDiffGame::prime(const PadInput p[2]) {
 // Random spot in the team's own half that is clear of the covers. The solo target also has to be in plain sight of
 // the player, so practice is never spent hunting for it behind a wall.
 void MidDiffGame::respawn(int i) {
-    // A new life starts a fresh pickup window and clears the previous exchange's item.
-    burger = Burger();
-    burger.timer = randomBetween(kBurgerWaitMin, kBurgerWaitMax);
+    if (burger.state != BurgerState::Flying && burger.state != BurgerState::Blast) {
+        burger = Burger();
+        burger.timer = randomBetween(kBurgerWaitMin, kBurgerWaitMax);
+    }
     const float side = face(i) > 0 ? -1.0f : 1.0f;
     float px = 0.0f, pz = side * kStartDepth;
     for (int k = 0; k < 32; ++k) {
@@ -517,6 +519,17 @@ uint32_t MidDiffGame::updateBurger(float dt) {
                 if (a==1) { burger.vx*=.82f; burger.vz*=.82f; if (std::fabs(burger.vy)<.25f) burger.vy=0; }
             }
         }
+    }
+    // A direct hit drops at the avatar's feet with its original fuse.
+    const Player& foe = players[1-burger.owner];
+    const float foot = jumpHeight(foe);
+    const float reach = kBodyRadius + kGrenadeRadius;
+    const float gapX = burger.x-foe.x, gapZ = burger.z-foe.z;
+    if (foe.dead <= 0 && gapX*gapX+gapZ*gapZ <= reach*reach &&
+        burger.y >= foot-kGrenadeRadius && burger.y <= foot+kStandHeight+kGrenadeRadius &&
+        segmentClear(burger.x,burger.y,burger.z,foe.x,foot+.9f,foe.z)) {
+        burger.vx = burger.vz = 0;
+        burger.vy = minf(burger.vy,0);
     }
     uint32_t events = static_cast<int>(before*4) != static_cast<int>(burger.timer*4) ? BurgerTick : 0;
     if (burger.timer > 0) return events;

@@ -16,7 +16,7 @@ All games support solo play and two StickS3 devices. On the launcher, B selects 
 ## Hardware
 
 - M5Stack StickS3 with a USB-C data cable.
-- For multiplayer, use two StickS3 devices with the same firmware/game protocol version.
+- Multiplayer supports two compatible StickS3 devices over ESP-NOW or one StickS3 and the local Android player over a password-protected hotspot. See the [Android build and connection guide (Chinese)](android/README.md).
 - MidDiff needs an [M5Stack Unit Joystick2](https://shop.m5stack.com/products/i2c-joystick-2-unit-stm32g030) on the Grove port (I2C `0x63`), mounted on the left of the device held in landscape. The Grove 5 V output is switched on only while a joystick game is selected.
 - A Windows PC is the documented development setup. PlatformIO, the ESP32 Arduino platform, and M5Unified are used to build the firmware.
 

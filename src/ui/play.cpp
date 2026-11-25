@@ -12,7 +12,7 @@
 #include "core/platform.h"
 #include "core/settings.h"
 #include "core/sound.h"
-#include "net/net_espnow.h"
+#include "net/radio.h"
 #include "net/net_session.h"
 #include "ui/gfx.h"
 
@@ -128,7 +128,7 @@ void pumpRadio(uint32_t now) {
     uint8_t mac[6];
     uint8_t buf[250];
     size_t len = 0;
-    while (net_espnow::poll(mac, buf, &len)) {
+    for (int i = 0; i < 24 && radio::poll(mac, buf, &len); ++i) {
 #ifdef DEBUG_REMOTE
         if (debug::g.lossPct > 0 && static_cast<int>(esp_random() % 100) < debug::g.lossPct) continue;
 #endif
@@ -349,10 +349,10 @@ void begin(const registry::GameEntry& entry) {
         offline_trace::record("game_alloc_fail");
         return;
     }
-    g_radioOk = net_espnow::begin();
+    g_radioOk = radio::beginGame();
     offline_trace::record("radio", g_radioOk);
     if (g_radioOk) {
-        g_session.begin(&net_espnow::transport(), esp_random(), millis(), *entry.info, g_gi.game);
+        g_session.begin(&radio::transport(), esp_random(), millis(), *entry.info, g_gi.game);
         g_session.setJoinable(true);
     }
 }
@@ -362,7 +362,9 @@ void end() {
     debug::releaseControls();
     input::endLook();
     display::setPortrait(false);
-    net_espnow::end();
+    if (g_radioOk) g_session.leave();
+    radio::endGame();
+    g_entry = nullptr;
     g_radioOk = false;
     arcade::gameDestroy(g_gi);
     display::setPortrait(false);
@@ -517,6 +519,23 @@ bool update(float dt) {
     return false;
 }
 
+#ifdef __ANDROID__
+const char* gameName() { return g_entry ? g_entry->name : ""; }
+int rttMs() { return g_radioOk && g_stage == Stage::Online ? g_session.rttMs() : -1; }
+const char* stateText() {
+    if (!g_entry) return "Menu";
+    if (g_stage == Stage::Lobby) return "Lobby";
+    if (g_stage == Stage::Solo) return "Solo";
+    static const char* states[] = {"Searching","Ready","Countdown","Playing","Link lost","Peer left","Timeout"};
+    return states[static_cast<int>(g_session.status())];
+}
+const char* roleText() {
+    if (!g_entry || g_stage != Stage::Online) return "-";
+    return g_session.role() == net::Role::Host ? "Host" : "Client";
+}
+bool needsJoystick() { return g_entry && g_entry->info->needsJoystick; }
+#endif
+
 void draw() {
     if (!g_gi.game) return;
     const uint32_t now = millis();
@@ -556,7 +575,7 @@ void debugLine() {
     Serial.printf("NET role=%d st=%s rtt=%d stage=%d phase=%d rxdrop=%u nearby=%d\n",
                   static_cast<int>(g_session.role()), names[static_cast<int>(g_session.status())], g_session.rttMs(),
                   static_cast<int>(g_stage), static_cast<int>(game().phase()),
-                  static_cast<unsigned>(net_espnow::overflowCount()), g_session.peerNearby(millis()) ? 1 : 0);
+                  static_cast<unsigned>(radio::overflowCount()), g_session.peerNearby(millis()) ? 1 : 0);
 }
 
 bool debugKey(char key) {
