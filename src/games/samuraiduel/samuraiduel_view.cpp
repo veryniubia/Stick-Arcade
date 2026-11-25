@@ -193,7 +193,8 @@ void drawSword(const Pose& p, float action, bool thrust) {
 }
 
 void character(int x,int feet,int facing,bool sword,int player,float walk,bool airborne,bool flash,float action=0,
-               bool thrust=false,float shotFx=0,float parryFx=0,float downTime=-1,int fallDirection=1,float time=0) {
+               bool thrust=false,float shotFx=0,float parryFx=0,float downTime=-1,int fallDirection=1,float time=0,
+               bool boosted=false) {
     auto& c=display::canvas();
     using Duel = SamuraiDuelGame;
     const bool down=downTime>=0;
@@ -214,6 +215,43 @@ void character(int x,int feet,int facing,bool sword,int player,float walk,bool a
     auto rows=sword ? samurai:gunner;
     uint16_t cloth=player ? rgb(191,72,83):rgb(77,153,173);
     const int flutter=int(sinf(time*7+player))+(walk!=0 ? 1:0);
+    const auto bodyX = [&](int xx, int yy) {
+        int shift=0;
+        if(!down && yy>=15 && airborne)shift=xx<6 ? -1:1;
+        else if(!down && yy>=15 && fabsf(walk)>1)shift=(int(walk/6)&1) ? (xx<6 ? -1:1):0;
+        if(!down && yy>=13 && yy<16 && xx<5)shift-=flutter;
+        return screen(float(xx-6+shift));
+    };
+    const auto visible = [&](char pixel, int yy) {
+        return pixel!='.' && !(action>0 && yy>=9 && pixel=='s') &&
+               !(down && downTime>.12f && pixel=='h');
+    };
+    if (boosted && !down) {
+        // Paint the aura behind the posed sprite, using the same animated row edges.
+        struct Edge { int left, right, y; };
+        Edge edges[18];
+        for (int yy=0;yy<18;++yy) {
+            int left=0, right=12;
+            while (!visible(rows[yy][left],yy)) ++left;
+            while (!visible(rows[yy][right],yy)) --right;
+            const int v=screen(float(yy-18));
+            const int a=pose.px(bodyX(left,yy),v), b=pose.px(bodyX(right,yy),v);
+            edges[yy]={std::min(a,b),std::max(a,b),pose.py(0,v)};
+        }
+        const int sweep=16-int(time*20+player*11)%20;
+        for (const auto& row : edges) {
+            if (abs(row.y-pose.py(0,0)+sweep)<=3)
+                c.fillRect(row.left-2,row.y-1,row.right-row.left+5,3,rgb(83,52,126));
+        }
+        for (const auto& row : edges)
+            c.fillRect(row.left-1,row.y-1,row.right-row.left+3,3,rgb(153,99,218));
+        for (const auto& row : edges) {
+            const int distance=abs(row.y-pose.py(0,0)+sweep);
+            if (distance>2) continue;
+            const uint16_t light=distance==0 ? rgb(242,215,255):rgb(201,155,248);
+            c.drawFastHLine(row.left-1,row.y,row.right-row.left+3,light);
+        }
+    }
     if(!down) {
         // The same cloth motion gives both silhouettes life without idle body jitter.
         pose.line(-2,-8,-6-flutter,-7, sword ? cloth:red);
@@ -230,8 +268,7 @@ void character(int x,int feet,int facing,bool sword,int player,float walk,bool a
         }
     }
     for(int yy=0;yy<18;++yy) for(int xx=0;xx<13;++xx) {
-        char p=rows[yy][xx]; if(p=='.' || (action>0 && yy>=9 && p=='s'))continue;
-        if(down && downTime>.12f && p=='h')continue;
+        char p=rows[yy][xx]; if(!visible(p,yy))continue;
         uint16_t col=ink;
         if(p=='h')col=sword ? (yy<3 ? rgb(236,199,125):rgb(166,115,66)):(yy<3 ? rgb(158,122,104):rgb(97,72,69));
         if(p=='s')col=rgb(225,185,146);
@@ -240,11 +277,7 @@ void character(int x,int feet,int facing,bool sword,int player,float walk,bool a
         if(p=='g')col=gold;
         if(p=='r')col=red;
         if(flash || (down && downTime<.07f))col=white;
-        int shift=0;
-        if(!down && yy>=15 && airborne)shift=xx<6 ? -1:1;
-        else if(!down && yy>=15 && fabsf(walk)>1)shift=(int(walk/6)&1) ? (xx<6 ? -1:1):0;
-        if(!down && yy>=13 && yy<16 && xx<5)shift-=flutter;
-        pose.pixel(screen(float(xx-6+shift)),screen(float(yy-18)),col);
+        pose.pixel(bodyX(xx,yy),screen(float(yy-18)),col);
     }
     if(down && downTime>.12f) {
         // Both fighters drop their weapon onto the deck rather than rotating it through it.
@@ -313,8 +346,8 @@ void SamuraiDuelGame::draw(int local,const arcade::DrawCtx& ctx) {
         const auto& f=fighters[i];int x=screen(f.x),y=screen(f.y);
         if(f.grounded)c.fillRect(x-4,y-1,9,1,ink);
         character(x,y,f.facing,isSword(i),i,fabsf(f.vx)>3 ? float(ctx.nowMs)/35:0,!f.grounded,false,
-                  f.action,f.thrust,f.shotFx,f.parryFx,f.down ? f.downTime:-1,f.fallDirection,ctx.nowMs*.001f);
-        if (boostRounds[i] && !f.down) ui::drawBurger(std::max(5, std::min(234, x)), y-26);
+                  f.action,f.thrust,f.shotFx,f.parryFx,f.down ? f.downTime:-1,f.fallDirection,ctx.nowMs*.001f,
+                  boostRounds[i]>0);
         if(i==local && !f.down) {
             c.fillRect(x-2,y-18,5,1,white);c.fillRect(x-1,y-17,3,1,white);c.drawPixel(x,y-16,white);
         }
