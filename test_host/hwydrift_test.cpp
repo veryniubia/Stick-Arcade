@@ -84,12 +84,84 @@ static void checkDriftExit() {
     const float caught=slideAngle(opposite.cars[0]);
     assert(std::fabs(caught)<released);
     pads[0].aim=0;
-    for (int i=0;i<30;++i) r.step(dt,pads);
+    for (int i=0;i<60;++i) r.step(dt,pads);
     assert(std::fabs(k.slip)<.03f);
     std::printf("Slide angle: held %.1f deg, 0.1s after release %.1f, with countersteer %.1f\n",held,released,caught);
 }
+
+static float magnitude(Vec v) { return std::sqrt(v.dot(v)); }
+
+static void checkSlideControl() {
+    Race r;
+    r.begin(arcade::Mode::Host,0);
+    auto& k=r.cars[0];
+    k.pos.x+=60;
+    k.vel={76,0};
+    PadInput pads[2];
+    pads[0].a=true;
+    pads[0].aim=12;
+    for (int i=0;i<12;++i) r.step(dt,pads);
+    // Pressing B must not step the turning radius: the line bends a little more, not twice as much.
+    auto course=[](const Kart& car) { return std::atan2(car.vel.y,car.vel.x); };
+    float before=course(k);
+    r.step(dt,pads);
+    const float grip=course(k)-before;
+    pads[0].b=true;
+    before=course(k);
+    r.step(dt,pads);
+    const float first=course(k)-before;
+    assert(first>0 && first<grip*1.5f);
+    const float flick=std::fabs(k.slip);
+    assert(flick>.08f && flick<.3f);
+    for (int i=0;i<25;++i) r.step(dt,pads);
+    const float held=k.slip;
+    assert(held>.2f && std::fabs(k.pos.y-node(0).y)<10);
+    // Light opposite lock trims the slide without ending it.
+    Race trim=r;
+    PadInput light[2]={};
+    light[0].a=light[0].b=true;
+    light[0].aim=-6.5f;
+    for (int i=0;i<15;++i) trim.step(dt,light);
+    assert(trim.cars[0].slip>.25f*held && trim.cars[0].slip<held);
+    // Full opposite lock flicks the tail across.
+    Race flicked=r;
+    light[0].aim=-22;
+    for (int i=0;i<30;++i) flicked.step(dt,light);
+    assert(flicked.cars[0].slip<-.15f);
+    std::printf("Slide control: kick %.2f rad, held %.2f, trimmed %.2f, flicked %.2f\n",
+                flick,held,trim.cars[0].slip,flicked.cars[0].slip);
+}
+
+static void checkWalls() {
+    const Vec start=node(0)+Vec{40,0};
+    Race r;
+    PadInput pads[2];
+    pads[0].a=true;
+    // Head on: stopped by the drawn wall, with an impact event.
+    r.begin(arcade::Mode::Host,0);
+    auto& k=r.cars[0];
+    k.pos=start;
+    k.heading=pi/2;
+    k.vel={0,45};
+    uint32_t events=0;
+    for (int i=0;i<60;++i) events|=r.step(dt,pads)&15;
+    assert(events&Race::Hit);
+    assert(std::fabs(k.pos.y-start.y)<=kHalfWidth);
+    // Glancing: the kart keeps most of its speed and is steered along the wall.
+    r.begin(arcade::Mode::Host,0);
+    k.pos=start+Vec{0,10};
+    k.heading=.2f;
+    k.vel={78,15.9f};
+    pads[0].a=true;
+    for (int i=0;i<40;++i) r.step(dt,pads);
+    std::printf("Wall: glancing exit speed %.1f, heading %.3f, y offset %.1f\n",magnitude(k.vel),k.heading,k.pos.y-start.y);
+    assert(std::fabs(k.pos.y-start.y)<=kHalfWidth);
+    assert(std::fabs(k.heading)<.2f && magnitude(k.vel)>50);
+}
 int main() {
     checkDriftExit();
+    checkSlideControl();
+    checkWalls();
     Race race;
     PadInput pads[2];
     race.begin(arcade::Mode::Solo,0);
@@ -125,7 +197,7 @@ int main() {
     race.begin(arcade::Mode::Solo,0);
     pads[0].a=true;
     for (int n=0;n<650 && k.pos.x<470;++n) {
-        pads[0].aim=n%2 ? 5.9f : -5.9f;
+        pads[0].aim=n%2 ? 3.9f : -3.9f;
         race.step(dt,pads);
         assert(k.heading==0 && k.pos.y==grid.y && !k.impact);
     }

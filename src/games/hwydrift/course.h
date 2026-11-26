@@ -14,7 +14,7 @@ struct Road {
     float section; // Continuous section index, zero at the timing line.
 };
 constexpr int kMapWidth = 600, kMapHeight = 338;
-constexpr float kHalfWidth = 16.f;
+constexpr float kHalfWidth = 17.4f; // Inner face of the drawn wall, past the kerb.
 int sections();
 Vec node(int index);
 Road nearestRoad(Vec position);

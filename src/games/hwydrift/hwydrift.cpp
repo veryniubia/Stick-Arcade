@@ -10,7 +10,7 @@ const arcade::GameInfo kHwyDriftInfo = {"hwydrift",7,4,sizeof(hwy::Race),0,creat
 
 namespace hwy {
 namespace {
-constexpr float pi = 3.14159265f, carRadius = 3.1f;
+constexpr float pi = 3.14159265f, carRadius = 3.1f*kKartScale;
 float magnitude(Vec v) { return std::sqrt(v.dot(v)); }
 float propRadius(int i) { return i%2 ? 3.5f : 3.f; }
 float inverseMass(int i) { return i%2 ? .55f : 1.6f; }
@@ -23,6 +23,40 @@ void confine(Body& body, float radius, const Road& road) {
     const Vec normal = offset*(1.f/dist);
     body.pos = road.center+normal*margin;
     body.vel = body.vel-normal*(1.15f*std::max(0.f,body.vel.dot(normal)));
+}
+
+// Probe circles at the nose and tail match the drawn body. The kart is pushed off the wall, loses some speed and
+// is steered along it, so scraping is slower than a clean line but never sticks. Returns the closing speed.
+float scrape(Kart& car, const Road& road) {
+    constexpr float probe = 1.7f*kKartScale, radius = 2.7f*kKartScale;
+    const Vec dir = {std::cos(car.heading), std::sin(car.heading)};
+    const float margin = kHalfWidth-radius;
+    float impact = 0;
+    bool touched = false;
+    Vec along;
+    for (int end=-1; end<=1; end+=2) {
+        const Vec offset = car.pos+dir*(probe*end)-road.center;
+        const float dist = magnitude(offset);
+        if (dist<=margin) continue;
+        const Vec normal = offset*(1.f/dist);
+        car.pos = car.pos-normal*(dist-margin);
+        const float closing = std::max(0.f,car.vel.dot(normal));
+        car.vel = car.vel-normal*(1.1f*closing);
+        if (!touched || closing>impact) {
+            impact = closing;
+            along = {-normal.y,normal.x};
+        }
+        touched = true;
+    }
+    if (!touched) return 0;
+    car.vel = car.vel*(1.f-std::min(.28f,.004f+.006f*impact));
+    if (impact>=8) {
+        // A real hit swings the nose along the wall; light scrapes leave steering alone.
+        if (car.vel.dot(along)<0) along = along*-1.f;
+        const float error = std::remainder(std::atan2(along.y,along.x)-car.heading,2*pi);
+        car.heading = std::remainder(car.heading+error*std::min(.3f,.012f*impact),2*pi);
+    }
+    return impact;
 }
 
 // Separate overlapping bodies and apply impulse only while approaching.
@@ -44,20 +78,33 @@ float contact(Body& a, Body& b, float separation, float invA, float invB) {
 
 unsigned drive(Kart& car, const PadInput& pad, float dt) {
     const float tilt = std::isfinite(pad.aim) ? pad.aim : 0;
-    constexpr float deadband=6.f, fullLock=28.f;
+    constexpr float deadband=4.f, fullLock=22.f, maxSlip=.67f;
     const float travel = std::min(1.f,std::max(0.f,(std::fabs(tilt)-deadband)/(fullLock-deadband)));
-    const float wheel = std::copysign(travel*(.32f+.68f*travel),tilt);
+    const float wheel = std::copysign(travel*(.7f+.3f*travel),tilt);
     const float speed = magnitude(car.vel);
     const bool slide = pad.b;
     const bool entering = slide && !car.drift;
     car.drift = slide;
     const float oldSlip=car.slip;
     const float speedRatio=std::min(1.f,speed/68.f);
+    // The tail kicks out as B goes down, so the response is felt before the slide builds.
+    if (entering && travel>0)
+        car.slip=std::copysign(std::min(maxSlip,std::fabs(car.slip)+.12f*speedRatio*std::min(1.f,travel*3.f)),tilt);
     const bool countersteer=wheel*oldSlip<0 && std::fabs(oldSlip)>.025f;
-    const float targetSlip=slide && !countersteer ? std::copysign(.67f*travel*speedRatio,tilt) : 0.f;
-    const float response=countersteer ? 10.f : slide ? 5.5f : 4.6f;
-    car.slip+=(targetSlip-oldSlip)*std::min(1.f,dt*response);
-    const float looseness=slide ? 1.f : std::min(1.f,std::fabs(car.slip)/.40f);
+    float targetSlip=0,response=slide ? 5.5f : 4.6f;
+    if (countersteer) {
+        // Opposite lock unwinds the slide in proportion to how far the wheel is turned. A held
+        // drift can be trimmed with light lock, and full lock flicks the tail over to the other side.
+        const float lock=std::fabs(wheel);
+        if (slide) targetSlip=oldSlip*(1.f-lock);
+        response=slide ? 6.f+11.f*lock*lock : 10.f;
+    } else if (slide && travel>0) {
+        targetSlip=std::copysign((.26f+.41f*travel)*speedRatio,tilt);
+    }
+    car.slip+=(targetSlip-car.slip)*std::min(1.f,dt*response);
+    car.slip=std::max(-maxSlip,std::min(maxSlip,car.slip));
+    // Grip follows the visible slide, so pressing or releasing B never steps the turning radius.
+    const float looseness=std::min(1.f,std::fabs(car.slip)/.30f);
     const float radius = 8.f+speed*speed*(.0068f-.0044f*looseness);
     const float turn = (speed+(pad.a ? 2.f : 0.f))/radius;
     // A sliding rear axle carries momentum around the bend after the wheel
@@ -69,9 +116,15 @@ unsigned drive(Kart& car, const PadInput& pad, float dt) {
     const float forward = car.vel.dot(traction);
     const Vec side = car.vel-traction*forward;
     const float drag = (pad.a ? kPoweredDrag : 1.65f)+.20f*std::fabs(car.slip);
+    const float damping = std::max(0.f,1.f-(13.f-7.2f*looseness)*dt);
     float along = forward+((pad.a ? kEngineAcceleration : 0.f)-drag*forward)*dt;
+    if (pad.a) {
+        // Tyres bleeding off sideways speed hand part of it back, and a clean exit from a deep slide pulls forward.
+        along += .3f*magnitude(side)*(1.f-damping);
+        if (!slide) along += 100.f*std::max(0.f,std::fabs(car.slip)-.12f)*dt;
+    }
     if (!pad.a && std::fabs(along)<.4f) along=0;
-    car.vel = traction*along+side*std::max(0.f,1.f-(13.f-7.2f*looseness)*dt);
+    car.vel = traction*along+side*damping;
     car.pos = car.pos+car.vel*dt;
     if (car.impact) --car.impact;
     return entering ? Race::Slide : 0;
@@ -168,7 +221,7 @@ uint32_t Race::step(float dt, const PadInput pads[2]) {
         for (int i=0;i<count;++i) {
             if (cars[i].finish) continue;
             const Road road=nearestRoad(cars[i].pos);
-            confine(cars[i],carRadius,road);
+            hit(cars[i],scrape(cars[i],road),events[i]);
             if (pass==1) events[i] |= score(cars[i],road,tick);
         }
     }

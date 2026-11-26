@@ -7,6 +7,7 @@ constexpr int kProps = 5;
 constexpr int kLaps = 3;
 constexpr int kFocusTicks = 60, kCountTicks = 180, kGridTicks = 90+kFocusTicks+kCountTicks;
 constexpr float kEngineAcceleration = 84.f, kPoweredDrag = .95f;
+constexpr float kKartScale = 1.25f; // Drawn body size and collision shape share this scale.
 struct Body { Vec pos, vel; };
 struct Kart : Body {
     float heading = 0;
@@ -37,13 +38,14 @@ public:
 private:
     int localPlayer_ = 0;
     Vec cameraPos_;
-    float cameraAngle_ = 0;
+    float cameraAngle_ = 0, cameraZoom_ = 1.8f;
     uint32_t cameraMs_ = 0;
-    struct Mark { Vec pos; float heading; uint32_t at; bool used; };
-    static constexpr int kMarks = 24;
-    Mark marks_[kMarks] = {};
+    // Rear-wheel contact points of a slide, recorded while drawing; `link` joins a mark to the previous one.
+    struct Mark { Vec left, right; uint32_t at; bool link; };
+    static constexpr int kMarks = 48;
+    Mark marks_[2][kMarks] = {};
+    uint8_t markHead_[2] = {};
     uint32_t drawTick_ = 0, lastMark_[2] = {};
-    int markIndex_ = 0;
 };
 void drawCard(int x, int y, int w, int h, uint32_t ms);
 void drawLobby(uint32_t ms);
