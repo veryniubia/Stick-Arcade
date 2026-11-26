@@ -18,6 +18,8 @@
 #include "games/throwhalla/throwhalla.h"
 #include "games/samuraiduel/samuraiduel.h"
 #include "games/middiff/middiff.h"
+#include "games/hwydrift/hwydrift.h"
+#include "games/springring/springring.h"
 
 // The tests never draw: the view half of the games is not linked.
 void ThrowhallaGame::draw(int, const arcade::DrawCtx&) {}
@@ -29,6 +31,11 @@ void SamuraiDuelGame::draw(int, const arcade::DrawCtx&) {}
 void SamuraiDuelGame::sfx(uint32_t) {}
 void MidDiffGame::draw(int, const arcade::DrawCtx&) {}
 void MidDiffGame::sfx(uint32_t) {}
+void hwy::Race::draw(int, const arcade::DrawCtx&) {}
+void hwy::Race::sfx(uint32_t) {}
+
+void springring::Match::draw(int, const arcade::DrawCtx&) {}
+void springring::Match::sfx(uint32_t) {}
 
 static int failures = 0;
 
@@ -173,6 +180,48 @@ static void freezeWorld(Endpoint& host, Endpoint& client) {
 
 static bool bothPlaying(Link& l) {
     return l.eps[0]->s.status() == Status::Playing && l.eps[1]->s.status() == Status::Playing;
+}
+
+static uint32_t preferSecondGame() { return 1; }
+
+static arcade::IGame* loadRandomTestGame(Endpoint& ep, uint16_t key) {
+    arcade::gameDestroy(ep.gi);
+    ep.gi = arcade::gameCreate(key == net::gameKey(kMidDiffInfo) ? kMidDiffInfo : kThrowhallaInfo);
+    return ep.gi.game;
+}
+
+static void testRandomPairing(bool clientHasStick) {
+    Link l;
+    l.loss = 0.2f;
+    l.latency = 10;
+    l.jitter = 15;
+    auto& c = l.add(kClient);
+    auto& h = l.add(kHost);
+    auto& direct = l.add(600, 0, &kMidDiffInfo);
+    const uint16_t keys[] = {net::gameKey(kThrowhallaInfo), net::gameKey(kMidDiffInfo)};
+    static Endpoint* client;
+    static Endpoint* host;
+    client = &c;
+    host = &h;
+    c.s.beginRandom(&c, kClient, l.now, preferSecondGame,
+                    [](uint16_t key) { return loadRandomTestGame(*client, key); });
+    h.s.beginRandom(&h, kHost, l.now, preferSecondGame,
+                    [](uint16_t key) { return loadRandomTestGame(*host, key); });
+    c.s.setRandomPool(keys, clientHasStick ? 2 : 1);
+    h.s.setRandomPool(keys, 2);
+    if (clientHasStick) {
+        c.in.ready = h.in.ready = false;
+        l.run(3000);
+        CHECK(c.s.status() == Status::Ready && h.s.status() == Status::Ready);
+        h.in.ready = true;
+        l.run(2000);
+        CHECK(c.s.status() == Status::Ready && h.s.status() == Status::Ready);
+        c.in.ready = true;
+    }
+    CHECK(l.runUntil(10000, [&] { return bothPlaying(l); }));
+    CHECK(c.s.selectedKey_ == keys[clientHasStick]);
+    CHECK(h.s.selectedKey_ == c.s.selectedKey_);
+    CHECK(direct.s.status() == Status::Searching);
 }
 
 static void testPairingClean() {
@@ -875,7 +924,95 @@ static void testMidDiffOverNetwork(float loss, int latency, int jitter) {
     }
 }
 
+static void testHwyDriftOverNetwork() {
+    Link l;
+    l.loss=.2f; l.latency=15; l.jitter=20;
+    auto& client=l.add(kClient,0,&kHwyDriftInfo);
+    auto& host=l.add(kHost,0,&kHwyDriftInfo);
+    auto bothOnGrid=[&] {
+        return host.s.status()==Status::Countdown && client.s.status()==Status::Countdown;
+    };
+    CHECK(l.runUntil(30000,[&]{return bothOnGrid() && client.s.countdownSec()>4.f;}));
+    CHECK(l.runUntil(4500,[&]{return bothOnGrid() && host.s.countdownSec()<2.5f
+                                                    && client.s.countdownSec()<2.5f;}));
+    CHECK(l.runUntil(30000,[&]{return bothPlaying(l);}));
+    auto& race=static_cast<hwy::Race&>(*host.gi.game);
+    auto& mirror=static_cast<hwy::Race&>(*client.gi.game);
+    const float grid=race.cars[0].pos.x;
+    client.in.pad.b=true;
+    CHECK(l.runUntil(1500,[&]{return mirror.cars[1].drift;}));
+    CHECK(race.cars[1].pos.x==grid && race.cars[1].drift);
+    client.in.pad.b=false;
+    client.in.pad.a=true;
+    CHECK(l.runUntil(2500,[&]{return mirror.cars[1].pos.x>grid+3;}));
+    CHECK(race.cars[0].pos.x==grid && race.cars[1].pos.x>grid);
+    const float tyreX=race.props[0].pos.x;
+    race.props[0].pos.y=race.cars[1].pos.y;
+    CHECK(l.runUntil(4000,[&]{return mirror.props[0].pos.x>tyreX+3;}));
+    l.cut=true; l.run(1000);
+    CHECK(host.s.status()==Status::LinkLost && client.s.status()==Status::LinkLost);
+    l.cut=false;
+    CHECK(l.runUntil(4000,[&]{return bothPlaying(l);}));
+    for(int i=0;i<2;++i) {
+        auto& k=race.cars[i];
+        k.pos=hwy::node(0)+hwy::Vec{-2.f-4*i,i ? 4.f : -4.f};
+        k.section=hwy::nearestRoad(k.pos).section;
+        k.heading=0;
+        k.vel={30,0};
+        k.laps=2;
+    }
+    CHECK(l.runUntil(4000,[&]{return mirror.phase()==arcade::MatchPhase::MatchEnd;}));
+    CHECK(mirror.cars[0].finish==race.cars[0].finish && mirror.cars[1].finish==race.cars[1].finish);
+    CHECK(mirror.cars[0].finish<mirror.cars[1].finish && l.maxLen<=250);
+    host.in.again=true; l.run(250);
+    client.in.again=true;
+    CHECK(l.runUntil(4000,[&]{return race.tick==0 && mirror.cars[0].finish==0;}));
+    CHECK(l.runUntil(1000,[&]{return bothOnGrid() && client.s.countdownSec()>4.f;}));
+}
+
+static void testSpringRingOverNetwork() {
+    using springring::Match;
+    Link link;
+    link.loss = .2f; link.latency = 15; link.jitter = 20;
+    auto& client = link.add(kClient, 0, &kSpringRingInfo);
+    auto& host = link.add(kHost, 0, &kSpringRingInfo);
+    CHECK(link.runUntil(30000, [&]{ return bothPlaying(link); }));
+    auto& game = static_cast<Match&>(*host.gi.game);
+    auto& view = static_cast<Match&>(*client.gi.game);
+    client.in.pad.aim = -20;
+    CHECK(link.runUntil(2000, [&]{ return view.pair.legs[1].reach < -8; }));
+    client.in.pad.a = true;
+    CHECK(link.runUntil(1500, [&]{ return view.pair.legs[1].length > .4f; }));
+    CHECK(game.pair.legs[0].length == 0 && (host.events & Match::Spring));
+    client.in.pad.a = false;
+    client.in.pad.aim = 0;
+    // Force the final fall and let the real step, pause and snapshots finish it.
+    game.begin(arcade::Mode::Host, 0);
+    game.score[0] = 2;
+    game.pair.angle = 2; game.pair.x = 170; game.pair.y = 96;
+    CHECK(link.runUntil(2500, [&]{ return view.phase() == arcade::MatchPhase::MatchEnd; }));
+    CHECK(view.score[0] == 3 && view.hitMask == 2 && link.maxLen <= 250);
+    arcade::Writer a,b;
+    game.encode(a); view.encode(b);
+    CHECK(a.n == b.n && !memcmp(a.buf,b.buf,a.n));
+    host.in.again = true; link.run(300);
+    CHECK(game.phase() == arcade::MatchPhase::MatchEnd);
+    client.in.again = true;
+    CHECK(link.runUntil(6000, [&]{ return game.score[0] == 0 && view.score[0] == 0; }));
+    CHECK(link.runUntil(10000, [&]{ return bothPlaying(link); }));
+    link.cut = true; link.run(1200);
+    CHECK(host.s.status() == Status::LinkLost && client.s.status() == Status::LinkLost);
+    link.cut = false;
+    CHECK(link.runUntil(3000, [&]{ return bothPlaying(link); }));
+    client.s.leave();
+    CHECK(link.runUntil(1500, [&]{ return host.s.status() == Status::PeerLeft; }));
+}
+
 int main() {
+    testSpringRingOverNetwork();
+    testHwyDriftOverNetwork();
+    testRandomPairing(false);
+    testRandomPairing(true);
     testPairingClean();
     testPairingSimultaneousAnyOrder();
     testPairingUnderLoss();

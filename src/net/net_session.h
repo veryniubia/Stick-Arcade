@@ -25,12 +25,22 @@ enum class Status : uint8_t { Searching, Ready, Countdown, Playing, LinkLost, Pe
 struct LocalInput {
     PadInput pad;
     bool again = false;  // A pressed since the previous call (rematch request at match end)
+    bool ready = true;   // false while calibrating before the first countdown
 };
+
+constexpr size_t kRandomCapacity = 32;
+constexpr uint16_t gameKey(const arcade::GameInfo& info) {
+    return static_cast<uint16_t>((info.wireId << 8) | info.protoVer);
+}
+size_t randomIndex(size_t count, uint32_t (*randomWord)());
 
 class Session {
 public:
     // `game` is the one game object of this device: the host steps it, the client only decodes snapshots into it.
     void begin(Transport* tx, uint32_t nonce, uint32_t nowMs, const arcade::GameInfo& info, arcade::IGame* game);
+    using LoadGame = arcade::IGame* (*)(uint16_t key);
+    void beginRandom(Transport* tx, uint32_t nonce, uint32_t nowMs, uint32_t (*randomWord)(), LoadGame loadGame);
+    void setRandomPool(const uint16_t* keys, size_t count);
     void onReceive(const uint8_t* mac, const uint8_t* data, size_t len, uint32_t nowMs);
     // Call every frame. Returns the game events to play sounds for.
     uint32_t update(uint32_t nowMs, const LocalInput& in);
@@ -70,6 +80,12 @@ private:
     bool joinable_ = true;
     bool peerSeen_ = false;
     uint32_t peerSeenMs_ = 0;
+    uint32_t (*randomWord_)() = nullptr;
+    LoadGame loadGame_ = nullptr;
+    uint16_t randomPool_[kRandomCapacity] = {};
+    size_t randomCount_ = 0;
+    uint16_t selectedKey_ = 0;
+    bool remoteReady_ = true;
 
     uint32_t lastUpdate_ = 0;
     uint32_t lastSend_ = 0;
@@ -105,7 +121,8 @@ private:
     uint32_t pendingEv_ = 0;
 
     void toSearching(uint32_t now);
-    void connect(Role role, uint32_t now);
+    bool connect(Role role, uint32_t now);
+    bool hasRandomGame(uint16_t key) const;
     void newMatch(uint32_t now);
     uint32_t updateHost(uint32_t now, float dt, const LocalInput& in);
     uint32_t updateClient(uint32_t now, const LocalInput& in);

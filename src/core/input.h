@@ -7,11 +7,12 @@ namespace input {
 
 void begin();
 void update();
-void updateMotion(uint32_t sampleMs);  // also accepts asynchronous IMU samples between display frames
+void updateMotion(uint32_t sampleMs, bool invertWheelAxis = false);  // also accepts asynchronous IMU samples
 
 // Device tilt in degrees: elevation of the screen's right edge above the horizontal plane, filtered,
 // relative to the calibrated level pose.
 float tiltDeg();
+float wheelTiltDeg();             // clockwise-positive steering, level against gravity
 float driveTiltDeg();             // fixed-reference screen-plane rotation; holds last angle near horizontal
 float rawTiltDeg();               // same without the calibration offset
 void setTiltOffset(float deg);    // pose that counts as level

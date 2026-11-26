@@ -7,6 +7,7 @@
 namespace play {
 
 void begin(const registry::GameEntry& entry);
+void beginRandom();
 bool update(float dt);  // returns true when the user should be sent back to the launcher
 void draw();
 void end();

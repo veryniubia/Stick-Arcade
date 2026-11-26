@@ -7,7 +7,7 @@ final class Arcade {
     static native void resume(String settings);
     static native void pause();
     static native void network(long handle);
-    static native void motion(boolean gyro, float x, float y, float z, long timestampNs);
+    static native void motion(boolean gyro, float x, float y, float z, long timestampNs, boolean invertWheelAxis);
     static native void heading(float degrees, long timestampNs);
     static native void controls(boolean a, boolean b, boolean jump, int x, int y);
     static native void clearControls();

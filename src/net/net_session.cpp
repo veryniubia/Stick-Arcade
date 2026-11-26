@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <string.h>
+#include <algorithm>
 
 #include "core/platform.h"
 #include "core/wire.h"
@@ -33,6 +34,8 @@ constexpr int kByeCopies = 4;
 
 // HELLO flag bits.
 constexpr uint8_t kHelloJoinable = 1;
+constexpr uint8_t kRandomGameId = 0;
+constexpr uint8_t kRandomProtocol = 1;
 
 // Snapshot flag bits.
 constexpr uint8_t kFlagHostAgain = 1;
@@ -44,6 +47,7 @@ constexpr uint8_t kInA = 1;
 constexpr uint8_t kInB = 2;
 constexpr uint8_t kInAgain = 4;
 constexpr uint8_t kInEcho = 8;
+constexpr uint8_t kInCalibrating = 16;
 
 uint32_t mix(uint32_t a, uint32_t b) {
     uint32_t h = a * 2654435761u ^ (b + 0x9E3779B9u + (a << 6) + (a >> 2));
@@ -55,6 +59,16 @@ uint32_t mix(uint32_t a, uint32_t b) {
 
 }  // namespace
 
+size_t randomIndex(size_t count, uint32_t (*randomWord)()) {
+    const uint32_t bound = static_cast<uint32_t>(count);
+    const uint32_t threshold = (0u - bound) % bound;
+    uint32_t word;
+    do {
+        word = randomWord();
+    } while (word < threshold);
+    return word % bound;
+}
+
 void Session::begin(Transport* tx, uint32_t nonce, uint32_t nowMs, const arcade::GameInfo& info,
                     arcade::IGame* game) {
     *this = Session();
@@ -65,6 +79,26 @@ void Session::begin(Transport* tx, uint32_t nonce, uint32_t nowMs, const arcade:
     lastUpdate_ = nowMs;
     stateSince_ = nowMs;
     lastSend_ = nowMs - kHelloMs;
+}
+
+void Session::beginRandom(Transport* tx, uint32_t nonce, uint32_t nowMs,
+                          uint32_t (*randomWord)(), LoadGame loadGame) {
+    *this = Session();
+    tx_ = tx;
+    nonce_ = nonce ? nonce : 1u;
+    lastUpdate_ = stateSince_ = nowMs;
+    lastSend_ = nowMs - kHelloMs;
+    randomWord_ = randomWord;
+    loadGame_ = loadGame;
+}
+
+void Session::setRandomPool(const uint16_t* keys, size_t count) {
+    randomCount_ = std::min(count, kRandomCapacity);
+    std::copy_n(keys, randomCount_, randomPool_);
+}
+
+bool Session::hasRandomGame(uint16_t key) const {
+    return std::find(randomPool_, randomPool_ + randomCount_, key) != randomPool_ + randomCount_;
 }
 
 bool Session::peerNearby(uint32_t nowMs) const { return peerSeen_ && nowMs - peerSeenMs_ < kPeerSeenMs; }
@@ -95,7 +129,14 @@ void Session::toSearching(uint32_t now) {
     stateSince_ = now;
 }
 
-void Session::connect(Role role, uint32_t now) {
+bool Session::connect(Role role, uint32_t now) {
+    if (loadGame_) {
+        if (!hasRandomGame(selectedKey_)) {
+            toSearching(now);
+            return false;
+        }
+        game_ = loadGame_(selectedKey_);
+    }
     state_ = State::Connected;
     role_ = role;
     lastRxMs_ = now;
@@ -105,11 +146,17 @@ void Session::connect(Role role, uint32_t now) {
     haveEcho_ = false;
     rxSeqValid_ = false;
     stage_ = Stage::Ready;
+    if (!game_) {
+        leave();
+        closeReason_ = Status::TimedOut;
+        return false;
+    }
     if (role == Role::Host) {
         heard_ = false;
         readyMs_ = 0.0f;
         newMatch(now);
     }
+    return true;
 }
 
 void Session::newMatch(uint32_t now) {
@@ -143,12 +190,16 @@ void Session::sendHello() {
     w.u8(kMagic);
     w.u8(PT_HELLO);
     w.u8(kVersion);
-    w.u8(info_->wireId);
-    w.u8(info_->protoVer);
-    w.u8(info_->maxPlayers);
+    w.u8(loadGame_ ? kRandomGameId : info_->wireId);
+    w.u8(loadGame_ ? kRandomProtocol : info_->protoVer);
+    w.u8(loadGame_ ? 2 : info_->maxPlayers);
     w.u8(kRoom);
     w.u8(joinable_ ? kHelloJoinable : 0);
     w.u32(nonce_);
+    if (loadGame_) {
+        w.u8(static_cast<uint8_t>(randomCount_));
+        for (size_t i = 0; i < randomCount_; ++i) w.u16(randomPool_[i]);
+    }
     tx_->send(nullptr, w.buf, w.n);
 }
 
@@ -159,6 +210,7 @@ void Session::sendOffer() {
     w.u32(nonce_);
     w.u32(candNonce_);
     w.u16(sid_);
+    if (loadGame_) w.u16(selectedKey_);
     tx_->send(peer_, w.buf, w.n);
 }
 
@@ -169,6 +221,7 @@ void Session::sendAccept() {
     w.u32(candNonce_);  // the host's nonce
     w.u32(nonce_);
     w.u16(sid_);
+    if (loadGame_) w.u16(selectedKey_);
     tx_->send(peer_, w.buf, w.n);
 }
 
@@ -186,6 +239,7 @@ void Session::sendInput(const LocalInput& in, uint32_t now) {
     if (in.pad.b) flags |= kInB;
     if (myAgain_) flags |= kInAgain;
     if (haveEcho_) flags |= kInEcho;
+    if (!in.ready) flags |= kInCalibrating;
     w.u8(flags);
     w.u8(in.pad.bCount);
     w.u8(in.pad.aCount);
@@ -263,6 +317,7 @@ void Session::parseInput(const uint8_t* d, size_t len, uint32_t now) {
     if (flags & kInEcho) noteEcho(echo, now);
 
     heard_ = true;
+    remoteReady_ = !(flags & kInCalibrating);
     remotePad_.aim = aim / 100.0f;
     remotePad_.a = (flags & kInA) != 0;
     remotePad_.b = (flags & kInB) != 0;
@@ -338,13 +393,31 @@ void Session::onReceive(const uint8_t* mac, const uint8_t* data, size_t len, uin
             const uint8_t room = r.u8();
             const uint8_t flags = r.u8();
             const uint32_t nonce = r.u32();
-            if (!r.ok || ver != kVersion || gameId != info_->wireId || proto != info_->protoVer ||
-                maxPlayers != info_->maxPlayers || room != kRoom) {
+            if (!r.ok || ver != kVersion || room != kRoom ||
+                gameId != (loadGame_ ? kRandomGameId : info_->wireId) ||
+                proto != (loadGame_ ? kRandomProtocol : info_->protoVer) ||
+                maxPlayers != (loadGame_ ? 2 : info_->maxPlayers)) {
                 break;
             }
             peerSeen_ = true;
             peerSeenMs_ = now;
             if (state_ != State::Searching || !joinable_ || !(flags & kHelloJoinable) || nonce >= nonce_) break;
+            if (loadGame_) {
+                const size_t count = r.u8();
+                if (count > kRandomCapacity || r.pos + count * 2 != len) break;
+                uint16_t common[kRandomCapacity];
+                size_t commonCount = 0;
+                for (size_t i = 0; i < randomCount_; ++i) {
+                    Reader remote = r;
+                    for (size_t j = 0; j < count; ++j) {
+                        if (remote.u16() != randomPool_[i]) continue;
+                        common[commonCount++] = randomPool_[i];
+                        break;
+                    }
+                }
+                if (!commonCount) break;
+                selectedKey_ = common[randomIndex(commonCount, randomWord_)];
+            }
             // The higher nonce hosts, so the host reacts to the lower device's hello.
             memcpy(peer_, mac, 6);
             candNonce_ = nonce;
@@ -361,6 +434,9 @@ void Session::onReceive(const uint8_t* mac, const uint8_t* data, size_t len, uin
             const uint32_t clientNonce = r.u32();
             const uint16_t sid = r.u16();
             if (!r.ok || state_ != State::Searching || !joinable_ || clientNonce != nonce_ || hostNonce <= nonce_) break;
+            const uint16_t key = loadGame_ ? r.u16() : 0;
+            if (!r.ok || r.pos != len || (loadGame_ && !hasRandomGame(key))) break;
+            selectedKey_ = key;
             memcpy(peer_, mac, 6);
             candNonce_ = hostNonce;
             sid_ = sid;
@@ -375,6 +451,8 @@ void Session::onReceive(const uint8_t* mac, const uint8_t* data, size_t len, uin
             const uint32_t hostNonce = r.u32();
             const uint32_t clientNonce = r.u32();
             const uint16_t sid = r.u16();
+            const uint16_t key = loadGame_ ? r.u16() : 0;
+            if (!r.ok || r.pos != len || key != selectedKey_) break;
             if (!r.ok || state_ != State::Offering || hostNonce != nonce_ || clientNonce != candNonce_) break;
             if (!fromPeer(mac, sid)) break;
             connect(Role::Host, now);
@@ -390,7 +468,7 @@ void Session::onReceive(const uint8_t* mac, const uint8_t* data, size_t len, uin
         case PT_SNAP: {
             const uint16_t sid = r.u16();
             if (!r.ok || role_ != Role::Client || !fromPeer(mac, sid)) break;
-            if (state_ == State::Accepting) connect(Role::Client, now);
+            if (state_ == State::Accepting && !connect(Role::Client, now)) break;
             if (state_ == State::Connected) parseSnapshot(data, len, now);
             break;
         }
@@ -455,13 +533,13 @@ uint32_t Session::updateHost(uint32_t now, float dt, const LocalInput& in) {
         switch (stage_) {
             case Stage::Ready:
                 game_->prime(pads);
-                if (heard_) {
+                if (heard_ && in.ready && remoteReady_) {
                     readyMs_ += dt * 1000.0f;
                     if (readyMs_ >= kReadyMs) {
                         stage_ = Stage::Countdown;
-                        cd_ = kCountdownSec;
+                        cd_ = kCountdownSec + game_->gridPreviewSeconds();
                     }
-                }
+                } else readyMs_ = 0.0f;
                 break;
             case Stage::Countdown:
                 game_->prime(pads);
@@ -484,7 +562,7 @@ uint32_t Session::updateHost(uint32_t now, float dt, const LocalInput& in) {
                     if (myAgain_ && oppAgain_) {
                         newMatch(now);
                         stage_ = Stage::Countdown;
-                        cd_ = kCountdownSec;
+                        cd_ = kCountdownSec + game_->gridPreviewSeconds();
                     }
                 }
                 break;

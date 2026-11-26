@@ -48,6 +48,6 @@ StickS3 硬件
 
 ## 构建环境
 
-`m5stack-sticks3` 包含全部注册游戏；`dev-throwhalla`、`dev-bumperduel`、`dev-samuraiduel` 和 `dev-middiff` 用于单游戏快速迭代；`debug-all` 启用串口调试控制和性能输出。具体配置见 `platformio.ini`。
+`m5stack-sticks3` 包含全部注册游戏；`dev-throwhalla`、`dev-bumperduel`、`dev-springring`、`dev-samuraiduel`、`dev-middiff` 和 `dev-hwydrift` 用于单游戏快速迭代；`debug-all` 启用串口调试控制和性能输出。具体配置见 `platformio.ini`。
 
 MoonDuel（`samuraiduel`，wire ID 5，协议 5，横屏）在游戏内部实现平台物理、落地刀击与弹反、水平子弹、小回合复位和再战换武器，并复用现有主机权威会话。`test_host/preview_samuraiduel.py` 通过主机端像素画布渲染实际绘制代码，供画面检查，需要 Pillow 和已安装的 M5GFX 字体依赖。

@@ -58,20 +58,26 @@ def main():
     bounds = state("Menu")
     tap(bounds,.66)
     time.sleep(1)
-    labels = ("THROWHALLA","BIG BUMP","MoonDuel","MidDiff")
-    for i,name in enumerate(("Throwhalla","Big-Bump","MoonDuel","MidDiff")):
+    tap(bounds,.66)
+    bounds = state("RANDOM Searching")
+    tap(bounds,.66)  # A returns from SEARCHING.
+    bounds = state("Menu")
+    tap(bounds,.34)  # Skip the first card, RANDOM.
+    labels = ("THROWHALLA","BIG BUMP","MoonDuel","SPRINGRING","HwyDrift","MidDiff")
+    for i,name in enumerate(("Throwhalla","Big-Bump","MoonDuel","SPRINGRING","HwyDrift","MidDiff")):
         if i: tap(bounds,.34)  # launcher remembers the last card
         tap(bounds,.66)
         bounds = state("Lobby")
-        b = .64 if i==3 else .34
-        if i==3:
+        joystick = name == "MidDiff"
+        b = .64 if joystick else .34
+        if joystick:
             tap(bounds,b)
             time.sleep(2)
         tap(bounds,b)
         bounds = state(labels[i]+" Solo")
-        assert (bounds[3] > bounds[2]) == (i == 1), (name, bounds)
+        assert (bounds[3] > bounds[2]) == (i in (1,4)), (name, bounds)
         shot(name)
-        tap(bounds,.86 if i==3 else .66)
+        tap(bounds,.86 if joystick else .66)
         shell("input","keyevent","KEYCODE_HOME")
         # Wait for the vendor launcher's home transition before bringing the task back.
         time.sleep(2)

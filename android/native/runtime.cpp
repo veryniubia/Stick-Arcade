@@ -95,13 +95,13 @@ extern "C" JNIEXPORT void JNICALL Java_dev_stickarcade_player_Arcade_heading(JNI
     input::headingSample(deg, uint32_t(ns / 1000000));
 }
 extern "C" JNIEXPORT void JNICALL Java_dev_stickarcade_player_Arcade_motion(JNIEnv*, jclass,
-        jboolean gyro, jfloat x, jfloat y, jfloat z, jlong ns) {
+        jboolean gyro, jfloat x, jfloat y, jfloat z, jlong ns, jboolean invertWheelAxis) {
     auto& imu = M5.Imu;
     imu.sample.usec = uint32_t(ns / 1000);
     if (gyro) imu.sample.gyro = {x,y,z};
     else imu.sample.accel = {x,y,z};
     imu.fresh = gyro ? m5::IMU_Class::sensor_mask_gyro : m5::IMU_Class::sensor_mask_accel;
-    input::updateMotion(uint32_t(ns / 1000000));
+    input::updateMotion(uint32_t(ns / 1000000), invertWheelAxis);
 }
 extern "C" JNIEXPORT void JNICALL Java_dev_stickarcade_player_Arcade_controls(JNIEnv*, jclass,
         jboolean a, jboolean b, jboolean jump, jint x, jint y) {

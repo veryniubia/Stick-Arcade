@@ -1,6 +1,6 @@
 # StickS3 桌面模拟器
 
-Windows 上的项目级 StickS3 硬件接口模拟器。运行原来的 `src/main.cpp`、启动动画、启动器、设置、四款游戏、输入处理及联机会话代码，只有屏幕后端和 ESP-NOW 传输层替换为桌面实现。无需连接实体设备。
+Windows 上的项目级 StickS3 硬件接口模拟器。运行原来的 `src/main.cpp`、启动动画、启动器、设置、六款游戏、输入处理及联机会话代码，只有屏幕后端和 ESP-NOW 传输层替换为桌面实现。无需连接实体设备。
 
 ## 启动
 
@@ -42,7 +42,7 @@ python simulator/run.py --no-build
 
 桌面画面将五档背光设置映射为适合显示器的亮度，默认约 94%，最高档为原始像素颜色；实体设备的 PWM 背光数值和保存格式不变。游戏区域独立缓冲重绘，右侧控件不随游戏帧刷新，状态文字最多每秒刷新十次。
 
-按 A 跳过启动画面；启动器按 B 切换、A 进入；游戏等待界面按 B 单人练习。MidDiff 先在等待界面短按 B 并松开，保持静止完成校准，然后再按 B 进入单人，用 WASD 移动、Space 跳跃、Q/E 转向、A 射击。Big Bump 会自动切换竖屏。MoonDuel 单人对手保持中性输入。
+按 A 跳过启动画面；启动器按 B 切换、A 进入；游戏等待界面按 B 单人练习。MidDiff 先在等待界面短按 B 并松开，保持静止完成校准，然后再按 B 进入单人，用 WASD 移动、Space 跳跃、Q/E 转向、A 射击。HwyDrift 开赛时切换竖屏，从全图拉近到跟车视角。按住 Z 加速、松开减速，左右方向键打方向，任何车速都可以按住 X 漂移。Big Bump 会自动切换竖屏。MoonDuel 和 Spring Ring 单人对手保持中性输入。Spring Ring 中按住 Z 伸腿，松开收腿，左右方向键模拟横屏倾斜以调整落脚点。
 
 暂停会冻结虚拟时间。A/B 面板按钮产生约 100 ms 短按；持续按键请使用键盘。失去窗口焦点时释放键盘，双窗口测试时避免出现卡住的按键。
 
@@ -64,7 +64,7 @@ python simulator/run.py --no-build --device 2
 .\.venv\Scripts\python.exe simulator/check.py
 ```
 
-验证四款游戏从真实启动器进入单人、按键长按、IMU、摇杆、竖屏、双摇退出、设置持久化、缺少摇杆时的入口限制，以及两个完整应用实例之间的联机。此验证脚本额外需要 Pillow（`python -m pip install pillow`）。产物在 `.pio/sticks3-simulator/checks/`。
+验证六款游戏从真实启动器进入单人、按键长按、IMU、摇杆、竖屏、双摇退出、设置持久化、缺少摇杆时的入口限制，以及两个完整应用实例之间的联机。此验证脚本额外需要 Pillow（`python -m pip install pillow`）。产物在 `.pio/sticks3-simulator/checks/`。
 
 也可编写输入脚本，每行格式为 `帧号 输入 值`，状态持续到下一次变更：
 

@@ -22,11 +22,14 @@ struct DrawCtx {
     bool solo = false;
     uint32_t nowMs = 0;
     bool scoped = false;
+    float countdownLeft = 0; // seconds until the online starting signal
 };
 
 class IGame {
 public:
     virtual ~IGame() = default;
+    // Optional lead-in before the platform's three countdown beats.
+    virtual float gridPreviewSeconds() const { return 0; }
 
     // Starts a fresh match. `seed` is identical on both devices so static decoration lines up.
     virtual void begin(Mode mode, uint32_t seed) = 0;
@@ -84,6 +87,8 @@ struct GameInfo {
     uint8_t maxPlayers;      // announced in HELLO; the session itself only pairs two devices so far
     bool portrait;  // lobby remains landscape; gameplay uses a real 135x240 canvas
     bool needsJoystick;  // requires the Joystick2 unit: shown apart in the launcher and fills PadInput's look/stick fields (false when omitted)
+    bool gyroScope;  // lobby gyro calibration and B scope/recenter controls
+    bool tiltWheel;  // physical steering-wheel degrees, clockwise positive
 };
 
 // One block per running game: [object][arena]. Internal RAM on the device, malloc on a PC.

@@ -33,7 +33,7 @@ float g_pos = 0.0f;  // card index currently at the centre, fractional while sli
 uint32_t g_toastUntil = 0;
 uint32_t g_stickPoweredMs = 0;
 
-int cardCount() { return registry::count() + 1; }  // the games plus SETTINGS
+int cardCount() { return registry::count() + 2; }  // RANDOM, games, SETTINGS
 
 int wrap(int i) {
     const int n = cardCount();
@@ -41,7 +41,9 @@ int wrap(int i) {
 }
 
 // Games that need the joystick form their own group, set apart from the rest.
-bool needsStick(int index) { return index < registry::count() && registry::get(index).info->needsJoystick; }
+bool needsStick(int index) {
+    return index > 0 && index <= registry::count() && registry::get(index - 1).info->needsJoystick;
+}
 
 // Distance from the card at `index` to the next one: wider where the joystick group begins or ends.
 int pitchAfter(int index) { return kPitch + (needsStick(wrap(index)) != needsStick(wrap(index + 1)) ? kGroupGap : 0); }
@@ -73,7 +75,8 @@ void drawSettingsCard(int x, int y, int w, int h, uint32_t ms) {
 }
 
 void drawCard(int index, int x, uint32_t ms) {
-    if (index < registry::count()) registry::get(index).drawCard(x, kCardY, kCardW, kCardH, ms);
+    if (index == 0) drawRandomCard(x, kCardY, kCardW, kCardH, ms);
+    else if (index <= registry::count()) registry::get(index - 1).drawCard(x, kCardY, kCardW, kCardH, ms);
     else drawSettingsCard(x, kCardY, kCardW, kCardH, ms);
 }
 
@@ -115,9 +118,27 @@ void drawGroupDivider(int centreX) {
     c.fillRoundRect(centreX - 6, cy + 3, 13, 5, 2, rgb(120, 124, 140));  // base
 }
 
-const char* cardName(int index) { return index < registry::count() ? registry::get(index).name : "SETTINGS"; }
+const char* cardName(int index) {
+    if (index == 0) return "RANDOM";
+    return index <= registry::count() ? registry::get(index - 1).name : "SETTINGS";
+}
 
 }  // namespace
+
+void drawRandomCard(int x, int y, int w, int h, uint32_t ms) {
+    auto& c = display::canvas();
+    c.setClipRect(x, y, w, h);
+    c.fillRect(x, y, w, h, rgb(33, 31, 66));
+    for (int dy = 4; dy < h; dy += 6) c.fillRect(x, y + dy, w, 1, rgb(47, 43, 83));
+    const int cx = x + w / 2;
+    const int cy = y + h / 2;
+    c.fillRoundRect(cx - 42, cy - 12, 30, 30, 4, rgb(82, 70, 138));
+    c.fillRoundRect(cx + 12, cy - 18, 30, 30, 4, rgb(82, 70, 138));
+    c.fillRoundRect(cx - 21, cy - 21, 42, 42, 6, rgb(119, 92, 206));
+    c.drawRoundRect(cx - 21, cy - 21, 42, 42, 6, ui::yellow());
+    ui::shadowText("?", cx, cy, 3, (ms / 500) % 2 ? ui::yellow() : ui::kWhite);
+    c.clearClipRect();
+}
 
 void begin() {
     if (g_sel >= cardCount()) g_sel = 0;
@@ -159,12 +180,13 @@ Result update(float dt) {
             return Result::None;
         }
         sound::playUi(sound::Ui::Select);
-        return g_sel < registry::count() ? Result::Game : Result::Settings;
+        if (g_sel == 0) return Result::Random;
+        return g_sel <= registry::count() ? Result::Game : Result::Settings;
     }
     return Result::None;
 }
 
-int selectedGame() { return g_sel; }
+int selectedGame() { return g_sel - 1; }
 
 void draw() {
     auto& c = display::canvas();

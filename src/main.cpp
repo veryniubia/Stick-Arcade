@@ -41,7 +41,8 @@ void goLauncher() {
 void startPlay(int gameIndex) {
     g_screen = Screen::Play;
     display::setTargetFps(kPlayFps);
-    play::begin(registry::get(gameIndex));
+    if (gameIndex < 0) play::beginRandom();
+    else play::begin(registry::get(gameIndex));
 }
 
 void goSettings() {
@@ -269,6 +270,7 @@ void loop() {
         case Screen::Launcher: {
             const launcher::Result r = launcher::update(dt);
             if (r == launcher::Result::Game) startPlay(launcher::selectedGame());
+            else if (r == launcher::Result::Random) startPlay(-1);
             else if (r == launcher::Result::Settings) goSettings();
             break;
         }

@@ -9,15 +9,20 @@
 - **Throwhalla**：倾斜设备瞄准，在熔岩竞技场中蓄力投掷武器并使用道具。
 - **Big Bump**：竖屏双人相扑游戏，控制充气斗士移动、冲撞并收集道具。
 - **MoonDuel**：月下木桥上的像素风武士 VS 枪手。倾斜控制移动和朝向，B 跳跃（按住跳得更高），A 攻击。武士只能在地面或平台上挥出月牙斩，刀锋可以将子弹反射。枪手可移动和空中射击。联机先到 5 分获胜，双方再战时才交换武器和服饰。单人进场随机分配武器，可一直对无输入的对手练习并累计命中数。[玩法说明](docs/samuraiduel.zh-CN.md)。
+- **Spring Ring**（SPRINGRING）：横握设备，红蓝两名斗士锁臂翻滚。按住 A 伸腿，松开收腿。平握只按 A 也能蹬地，左右轻倾可改变脚尖落点。快要倒栽时，试着够到金色弹板借力翻回来。谁先用头撞到擂台或弹板，对方得一分；同一步双方撞头则平局重开。先到三分获胜，单人对手全程保持中性输入。
 - **MidDiff**（需要摇杆）：第一人称“中门对狙”（沙漠老城，T 对 CT）。摇杆前后左右移动，按下摇杆跳跃（消耗体力），转动设备改变视角（向两侧各转 30° 对应视角各转 70°，可小幅上下看），A 瞬发射击，开局按 B 并握稳校准，局内短按 B 切换 2× 瞄准镜，长按重新校准。中墙有不定时升降的闸门，倒下后 1.5 秒随机复活，先到 5 分获胜；单人是无限靶场练习。[玩法说明](docs/middiff.zh-CN.md)。
 
+- **HwyDrift** 竖握设备，在铜厂模型赛道 Copper Mill 上跑三圈。先展示全图，再拉近到发车位，随后倒数 3、2、1。比赛中镜头随行进方向缓动。按住 A 加速、松开减速，左右倾斜打方向。低速转弯半径小，高速转弯半径大。B 随时可以按住漂移，也可以从发车前一直按住。松开 B 后车尾会再滑一小段，回正方向可收住，轻微反打收得更快。右下角仪表显示 0–100 的相对车速。车辆可以掉头逆行，也能把轮胎、木箱和对手撞开。单人计时，双机比谁先完赛。
+
 所有游戏都支持单人和两台 StickS3 联机。启动器中按 B 切换游戏卡片，按 A 进入；需要摇杆的游戏单独成组，用橙色虚线分隔并带摇杆图标，卡片底部有“JOYSTICK REQUIRED”标签和就绪/未检测到状态，没有摇杆时无法进入。等待界面按 B 开始单人游戏，按 A 返回启动器。游戏内快速连续摇晃设备两次打开退出确认，按 A 退出、按 B 取消。单人退出提示会等待按键。当前屏幕文字为英文。
+
+第一张卡片 **RANDOM** 会搜索同样选择了 RANDOM 的玩家。配对后双方进入同一款随机抽中的游戏。搜索时按 B 可抽一款进行单人练习。双人都具备摇杆时才会把 MidDiff 纳入候选，单人只检查本机。Android 屏幕摇杆也算可用。抽中 MidDiff 后先完成陀螺仪校准，再开始游戏。再战沿用已抽中的游戏。
 
 ## 硬件
 
 - M5Stack StickS3 和可传输数据的 USB-C 线。
 - 双机可以使用两台协议兼容的 StickS3，也可以开启 PHONE LINK，用 Android 手机作为第二名玩家。APK、热点连接、签名和真机验收见[手机调试说明](android/README.md)。
-- MidDiff 需要 [M5Stack Unit Joystick2](https://shop.m5stack.com/products/i2c-joystick-2-unit-stm32g030) 接在 Grove 接口（I2C 地址 `0x63`），横屏握持时摇杆在左手边。仅在选中需要摇杆的游戏时才打开 Grove 的 5 V 输出。
+- MidDiff 需要 [M5Stack Unit Joystick2](https://shop.m5stack.com/products/i2c-joystick-2-unit-stm32g030) 接在 Grove 接口（I2C 地址 `0x63`），横屏握持时摇杆在左手边。仅在选中需要摇杆的游戏或 RANDOM 搜索期间才打开 Grove 的 5 V 输出。
 - 当前提供 Windows 开发流程；固件使用 PlatformIO、ESP32 Arduino 平台和 M5Unified 构建。
 
 ## 构建和烧录
@@ -37,7 +42,7 @@ python -m venv .venv
 .\.venv\Scripts\pio.exe run -e m5stack-sticks3 -t upload --upload-port COM9
 ```
 
-首次构建会下载 ESP32 工具链、Arduino 框架和 M5Unified。若无法连接设备，请用侧边复位键让 StickS3 进入 USB Bootloader 后重试。也可以用 `dev-throwhalla`、`dev-bumperduel`、`dev-samuraiduel` 或 `dev-middiff` 单独构建某一款游戏。
+首次构建会下载 ESP32 工具链、Arduino 框架和 M5Unified。若无法连接设备，请用侧边复位键让 StickS3 进入 USB Bootloader 后重试。也可以用 `dev-throwhalla`、`dev-bumperduel`、`dev-samuraiduel`、`dev-middiff`、`dev-hwydrift`、`dev-springring` 单独构建某一款游戏。
 
 ## 项目结构
 

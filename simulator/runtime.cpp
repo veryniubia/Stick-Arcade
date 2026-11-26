@@ -151,7 +151,7 @@ int main(int argc,char** argv){try{
     if(sim::device<1||sim::device>2)throw std::runtime_error("Device must be 1 or 2");
     std::filesystem::create_directories(sim::outputDir);std::string prefs=(std::filesystem::path(sim::outputDir)/("settings-"+std::to_string(sim::device)+".bin")).string();_putenv_s("STICKS3_SETTINGS",prefs.c_str());
     auto actions=loadScript(script);setup();if(!sim::headless)createWindow();
-    std::ofstream trace;if(sim::headless){trace.open(std::filesystem::path(sim::outputDir)/"input-trace.csv");trace<<"frame,ms,a,b,aCount,bCount,tilt,driveTilt,yaw,pitch,joyX,joyY,stickCount,width,height\n";}
+    std::ofstream trace;if(sim::headless){trace.open(std::filesystem::path(sim::outputDir)/"input-trace.csv");trace<<"frame,ms,a,b,aCount,bCount,tilt,driveTilt,yaw,pitch,joyX,joyY,stickCount,width,height,wheelTilt\n";}
     auto nextTick=std::chrono::steady_clock::now();
     for(int frame=0;running&&(frames<0||frame<frames);){uint64_t before=sim::timeUs;
         if(window){MSG msg;while(PeekMessage(&msg,nullptr,0,0,PM_REMOVE)){TranslateMessage(&msg);DispatchMessage(&msg);}readControls();}
@@ -163,7 +163,7 @@ int main(int argc,char** argv){try{
         }
         auto tickStart=std::chrono::steady_clock::now();
         if(!paused||singleStep){for(const auto& a:actions[frame])action(a);loop();singleStep=false;std::fill(std::begin(keyPresses),std::end(keyPresses),false);
-            if(trace)trace<<frame<<','<<millis()<<','<<input::aHeld()<<','<<input::bHeld()<<','<<int(input::aCount())<<','<<int(input::bCount())<<','<<input::tiltDeg()<<','<<input::driveTiltDeg()<<','<<input::lookYawDeg()<<','<<input::lookPitchDeg()<<','<<int(joystick::x())<<','<<int(joystick::y())<<','<<int(joystick::pressCount())<<','<<display::width()<<','<<display::height()<<'\n';++frame;
+            if(trace)trace<<frame<<','<<millis()<<','<<input::aHeld()<<','<<input::bHeld()<<','<<int(input::aCount())<<','<<int(input::bCount())<<','<<input::tiltDeg()<<','<<input::driveTiltDeg()<<','<<input::lookYawDeg()<<','<<input::lookPitchDeg()<<','<<int(joystick::x())<<','<<int(joystick::y())<<','<<int(joystick::pressCount())<<','<<display::width()<<','<<display::height()<<','<<input::wheelTiltDeg()<<'\n';++frame;
         }
         cleanAudio();nextTick=tickStart+std::chrono::microseconds(paused?16000:sim::timeUs-before);
     }

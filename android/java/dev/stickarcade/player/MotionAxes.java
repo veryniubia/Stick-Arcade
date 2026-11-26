@@ -2,6 +2,9 @@ package dev.stickarcade.player;
 
 // Sensor axes follow the natural display, including devices with a landscape natural display.
 final class MotionAxes {
+    // Portrait racing reads body X (minus the legacy right component).
+    static boolean invertWheelAxis(int rotation) { return (rotation & 1) != 0; }
+
     static void convert(float[] out, float x, float y, float z, int rotation, boolean portrait, boolean gyro) {
         float right, up;
         switch (rotation) {

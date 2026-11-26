@@ -10,7 +10,13 @@
 #define GAME_SAMURAIDUEL 1
 #elif defined(ONLY_GAME_MIDDIFF)
 #define GAME_MIDDIFF 1
+#elif defined(ONLY_GAME_HWYDRIFT)
+#define GAME_HWYDRIFT 1
+#elif defined(ONLY_GAME_SPRINGRING)
+#define GAME_SPRINGRING 1
 #else
+#define GAME_SPRINGRING 1
+#define GAME_HWYDRIFT 1
 #define GAME_THROWHALLA 1
 #define GAME_BUMPERDUEL 1
 #define GAME_SAMURAIDUEL 1
@@ -37,6 +43,14 @@
 #include "games/middiff/view.h"
 #endif
 
+#ifdef GAME_HWYDRIFT
+#include "games/hwydrift/hwydrift.h"
+#endif
+
+#ifdef GAME_SPRINGRING
+#include "games/springring/springring.h"
+#endif
+
 namespace registry {
 
 namespace {
@@ -50,6 +64,12 @@ const GameEntry kGames[] = {
 #endif
 #ifdef GAME_SAMURAIDUEL
     {&kSamuraiDuelInfo, "MoonDuel", nullptr, samuraiduel_view::drawCard, samuraiduel_view::drawLobby},
+#endif
+#ifdef GAME_SPRINGRING
+    {&kSpringRingInfo, "SPRINGRING", nullptr, springring::drawCard, springring::drawLobby},
+#endif
+#ifdef GAME_HWYDRIFT
+    {&kHwyDriftInfo, "HwyDrift", nullptr, hwy::drawCard, hwy::drawLobby},
 #endif
 #ifdef GAME_MIDDIFF
     {&kMidDiffInfo, "MidDiff", nullptr, middiff_view::drawCard, middiff_view::drawLobby},

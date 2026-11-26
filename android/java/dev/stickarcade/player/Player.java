@@ -126,7 +126,7 @@ public final class Player extends Activity implements Choreographer.FrameCallbac
             return;
         }
         MotionAxes.convert(axes,e.values[0],e.values[1],e.values[2],rotation,portrait,gyro);
-        Arcade.motion(gyro,axes[0],axes[1],axes[2],e.timestamp);
+        Arcade.motion(gyro,axes[0],axes[1],axes[2],e.timestamp,MotionAxes.invertWheelAxis(rotation));
     }
     @Override public void onAccuracyChanged(Sensor sensor,int accuracy) {}
     @Override public void doFrame(long ns) {

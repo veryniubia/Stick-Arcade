@@ -91,5 +91,5 @@ int main() {
     assert(!ap.udp.connected(now));
     stranger.udp.service(now); ap.udp.service(now); stranger.udp.service(now);
     assert(stranger.udp.connected(now));
-    puts("PASS UDP datagram bounds, peer filter, AP idle/rejoin, four games x both host roles, RTT, loss, recovery and leave");
+    puts("PASS UDP datagram bounds, peer filter, AP idle/rejoin, all games x both host roles, RTT, loss, recovery and leave");
 }

@@ -25,6 +25,7 @@ bool g_turning = false;
 bool g_lookOn = false;
 uint32_t g_lookUs = 0;
 float g_tilt = 0.0f;  // filtered device tilt in degrees
+float g_wheelTilt = 0.0f;
 float g_offset = 0.0f;
 bool g_primed = false;
 bool g_imuOk = false;
@@ -48,6 +49,7 @@ namespace input {
 void begin() {
     g_imuOk = M5.Imu.isEnabled();
     g_primed = false;
+    g_wheelTilt = 0;
     g_portraitTilt.reset();
     g_shake.reset();
     g_shaken = false;
@@ -58,10 +60,15 @@ void update() {
     if (M5.BtnA.wasPressed()) ++g_aCount;
     if (bPressed) ++g_bCount;
     joystick::update();
+#if defined(ARDUINO_ARCH_ESP32)
+    // On the StickS3, lowering the right edge in portrait gives negative body X.
+    updateMotion(millis(), true);
+#else
     updateMotion(millis());
+#endif
 }
 
-void updateMotion(uint32_t sampleMs) {
+void updateMotion(uint32_t sampleMs, bool invertWheelAxis) {
     if (!g_imuOk) return;
     const auto fresh = M5.Imu.update();
     if (!fresh) return;
@@ -97,6 +104,19 @@ void updateMotion(uint32_t sampleMs) {
     if (along == 0.0f && across == 0.0f) return;
 
     const float deg = atan2f(along, across) * kRadToDeg;
+    // The wheel uses gravity level even when another game has saved an aim trim.
+    // Smooth outward steering, but release immediately to the measured angle
+    // when coming back towards centre. A sustained bank remains a sustained turn.
+    if (magnitude >= .65f && magnitude <= 1.35f) {
+        // Across the short edge of the portrait display. Using both other axes
+        // keeps a flat, face-up device at neutral after a bank.
+        const float bank = atan2f(ax, sqrtf(ay*ay + az*az)) * kRadToDeg;
+        const float target = invertWheelAxis ? -bank : bank;
+        if (fabsf(target) <= fabsf(g_wheelTilt) || target*g_wheelTilt < 0)
+            g_wheelTilt = target;
+        else
+            g_wheelTilt += .5f*(target-g_wheelTilt);
+    }
     if (!g_primed) {
         g_tilt = deg;
         g_primed = true;
@@ -111,6 +131,7 @@ void updateMotion(uint32_t sampleMs) {
 }
 
 float driveTiltDeg() { return g_portraitTilt.angleDeg(); }
+float wheelTiltDeg() { return g_wheelTilt; }
 float rawTiltDeg() { return g_tilt; }
 float tiltDeg() { return g_tilt - g_offset; }
 void setTiltOffset(float deg) { g_offset = deg; }

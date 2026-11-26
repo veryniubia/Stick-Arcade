@@ -9,15 +9,20 @@
 - **Throwhalla** — aim by tilting the device, charge and throw weapons across a lava arena, and use powerups.
 - **Big Bump** — a portrait sumo game where players steer inflatable fighters, use bursts, and collect items.
 - **MoonDuel** — pixel-art samurai versus gunslinger on a moonlit bridge. Tilt to move and turn, tap/hold B for a short/high jump, and press A to attack. The grounded crescent slash reflects bullets, and the gun can fire while moving or airborne. In versus, first to five wins and weapons and outfits swap on rematch. In solo practice, you start with a random weapon and can keep scoring against an opponent that receives neutral input. See [rules and tuning](docs/samuraiduel.zh-CN.md) (Chinese).
+- **Spring Ring** (SPRINGRING) — lock arms in a landscape wrestling ring. Hold A to extend your leg and release to tuck. Tilt towards either screen edge to place your boot, or play level with A alone. Catch the gold springboard to roll out of a fall. A head hitting the mat or board gives the opponent a point. A double head impact resets the round without a point. First to three wins, including practice against a neutral opponent.
 - **MidDiff** (needs the joystick) — a first-person T vs CT sniper duel in a desert old town. Move with the joystick, press it to hop (uses stamina), turn the device to look (30° to either side turns the view 70°, with limited up/down), A fires an instant shot, tap B for the 2× scope and hold B to repeat the opening gyro calibration. A timed lift gate in the mid wall opens and closes at random, deaths respawn after 1.5 s at a random spot, and first to five points wins; solo is endless target practice. See [rules and tuning](docs/middiff.zh-CN.md) (Chinese).
 
+- **HwyDrift** — race toy cars around Copper Mill, a three-lap circuit in portrait. See the full course, then zoom onto the grid for the 3–2–1 countdown. The camera follows your direction of travel. Hold A to accelerate and release to slow down. Tilt to steer and hold B at any speed to drift, including before the start. Release B and unwind the steering to catch the slide. The dial shows speed on a 0–100 scale. Tight turns take less room at low speed. Push loose tyres and crates aside or take a clean line. You can turn around and drive the circuit backwards. Race the clock solo or make contact with a rival in linked play.
+
 All games support solo play and two StickS3 devices. On the launcher, B selects a game and A opens it. Games that need the joystick are shown in their own orange group with a joystick badge, a "JOYSTICK REQUIRED" ribbon, and a ready/not-found status; they cannot be opened without the unit. On the waiting screen, B starts solo; A returns to the launcher. Shake the device twice quickly to open the exit prompt, then press A to exit or B to cancel. In solo play the prompt stays open until you choose. On-screen text is currently English.
+
+The first card, **RANDOM**, searches for another player who also chose RANDOM. Once paired, both devices play the same randomly selected game. Press B while searching to draw a game for solo practice. MidDiff enters the draw only when both players have a joystick, or when the local player has one in solo. Android touch controls count as a joystick. If MidDiff is drawn, finish gyro calibration before play. Rematches keep the selected game.
 
 ## Hardware
 
 - M5Stack StickS3 with a USB-C data cable.
 - Multiplayer supports two compatible StickS3 devices over ESP-NOW or one StickS3 and the local Android player over a password-protected hotspot. See the [Android build and connection guide (Chinese)](android/README.md).
-- MidDiff needs an [M5Stack Unit Joystick2](https://shop.m5stack.com/products/i2c-joystick-2-unit-stm32g030) on the Grove port (I2C `0x63`), mounted on the left of the device held in landscape. The Grove 5 V output is switched on only while a joystick game is selected.
+- MidDiff needs an [M5Stack Unit Joystick2](https://shop.m5stack.com/products/i2c-joystick-2-unit-stm32g030) on the Grove port (I2C `0x63`), mounted on the left of the device held in landscape. The Grove 5 V output is switched on only while a joystick game is selected or RANDOM is searching.
 - A Windows PC is the documented development setup. PlatformIO, the ESP32 Arduino platform, and M5Unified are used to build the firmware.
 
 ## Build and upload
@@ -37,7 +42,7 @@ Connect the StickS3 and upload (replace `COM9` with its current port):
 .\.venv\Scripts\pio.exe run -e m5stack-sticks3 -t upload --upload-port COM9
 ```
 
-The first build downloads the ESP32 toolchain, Arduino framework, and M5Unified. If upload cannot connect, put the StickS3 into its USB bootloader using its side reset button, then retry. You can also build one game at a time with `dev-throwhalla`, `dev-bumperduel`, `dev-samuraiduel`, or `dev-middiff`.
+The first build downloads the ESP32 toolchain, Arduino framework, and M5Unified. If upload cannot connect, put the StickS3 into its USB bootloader using its side reset button, then retry. You can also build one game at a time with `dev-throwhalla`, `dev-bumperduel`, `dev-samuraiduel`, `dev-middiff`, `dev-hwydrift`, or `dev-springring`.
 
 ## Project structure
 

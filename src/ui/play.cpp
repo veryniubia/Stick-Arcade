@@ -15,6 +15,7 @@
 #include "net/radio.h"
 #include "net/net_session.h"
 #include "ui/gfx.h"
+#include "ui/launcher.h"
 
 namespace play {
 
@@ -35,11 +36,15 @@ constexpr uint32_t kPingShowMs = 5000;
 constexpr uint32_t kSoloHintMs = 10000;   // after this long without an opponent the SOLO hint starts to blink
 constexpr uint32_t kOnlineExitAskMs = 3000;
 constexpr uint32_t kJoinWindowMs = 10000; // how long a solo player stays joinable after pressing A on OPP FOUND
+constexpr uint32_t kRandomStickProbeMs = 700;
 
 const registry::GameEntry* g_entry = nullptr;
 arcade::GameInstance g_gi;
 net::Session g_session;
 bool g_radioOk = false;
+bool g_randomSearching = false;
+bool g_randomSoloPending = false;
+uint32_t g_noEligibleSince = 0;
 Stage g_stage = Stage::Lobby;
 
 uint32_t g_beginMs = 0;
@@ -67,6 +72,12 @@ uint32_t g_stickLostMs = 0;  // when a game that needs the joystick noticed it w
 
 arcade::IGame& game() { return *g_gi.game; }
 
+bool liveB() {
+    const auto& info=*g_entry->info;
+    return (input::bHeld() && (g_bArmed || info.tiltWheel)) || debug::braking() ||
+           (!info.portrait && !info.tiltWheel && debug::charging());
+}
+
 // Hands over the local player's hands. While the exit confirmation is open the held keys are frozen so that a
 // charge in progress neither fires nor stops, and presses made for the confirmation never reach the game.
 PadInput makePad() {
@@ -83,6 +94,8 @@ PadInput makePad() {
         } else {
             p.jumpCount = g_frozenJumpCount - g_jumpSkip;
         }
+    } else if (g_entry->info->tiltWheel) {
+        p.aim = debug::aim(input::wheelTiltDeg());
     } else {
         p.aim = debug::aim(g_entry->info->portrait ? input::driveTiltDeg() : input::tiltDeg() * settings::aimGain());
     }
@@ -93,7 +106,7 @@ PadInput makePad() {
         p.bCount = g_frozenBCount - g_bSkip;
     } else {
         p.a = (input::aHeld() && g_aArmed) || debug::charging();
-        p.b = (input::bHeld() && g_bArmed) || debug::braking() || (!g_entry->info->portrait && debug::charging());
+        p.b = liveB();
         p.aCount = input::aCount() - g_aSkip;
         p.bCount = input::bCount() + debug::extraB() - g_bSkip;
     }
@@ -105,7 +118,7 @@ void openExitAsk(uint32_t now) {
     g_exitAsk = true;
     g_exitAskMs = now;
     g_frozenA = (input::aHeld() && g_aArmed) || debug::charging();
-    g_frozenB = (input::bHeld() && g_bArmed) || debug::braking() || (!g_entry->info->portrait && debug::charging());
+    g_frozenB = liveB();
     g_frozenACount = input::aCount();
     g_frozenBCount = input::bCount() + debug::extraB();
     g_frozenJumpCount = joystick::pressCount();
@@ -138,7 +151,7 @@ void pumpRadio(uint32_t now) {
 
 void startSolo() {
     offline_trace::record("solo");
-    if (g_entry->info->portrait) g_bArmed = false;
+    if (g_entry->info->portrait && !g_entry->info->tiltWheel) g_bArmed = false;
     display::setPortrait(g_entry->info->portrait);
     game().begin(arcade::Mode::Solo, esp_random());
     // The B press that selected SOLO belongs to the waiting screen, as do older press counters.
@@ -264,10 +277,18 @@ void drawExitAsk() {
 
 void drawLobby() {
     const uint32_t ms = millis();
-    g_entry->drawLobby(ms);
-    ui::shadowText(g_entry->name, display::width() / 2, 20, 2, ui::yellow());
+    if (g_randomSearching) {
+        display::canvas().fillScreen(rgb(20, 22, 36));
+        launcher::drawRandomCard(60, 75, 120, 40, ms);
+    } else {
+        g_entry->drawLobby(ms);
+    }
+    ui::shadowText(g_randomSearching ? "RANDOM" : g_entry->name, display::width() / 2, 20, 2, ui::yellow());
     ui::shadowText(g_radioOk ? "SEARCHING" : "RADIO OFF", display::width() / 2, 52, 2, ui::kWhite);
     if (g_radioOk) drawDots(display::width() / 2 - 12, 68, ms - g_beginMs);
+    if (g_randomSearching && g_noEligibleSince && ms - g_noEligibleSince < 1600) {
+        ui::shadowText("NO JOYSTICK FOUND", display::width() / 2, 106, 1, ui::red());
+    }
     ui::hintBar("SOLO", "BACK", ms - g_beginMs > kSoloHintMs || !g_radioOk);
 }
 
@@ -281,9 +302,11 @@ void drawOnlineOverlays(uint32_t now) {
     const int overlaySize = g_entry->info->portrait ? 1 : 2;
     switch (st) {
         case net::Status::Ready:
+            if (game().gridPreviewSeconds()>0) break;
             ui::shadowText("READY", cx, 40, 3, ui::yellow());
             break;
         case net::Status::Countdown: {
+            if (game().gridPreviewSeconds()>0) break; // game draws its grid sequence
             char d[2] = {static_cast<char>('0' + static_cast<int>(g_session.countdownSec() + 0.99f)), 0};
             ui::shadowText(d, cx, 44, 5, ui::yellow());
             break;
@@ -319,14 +342,14 @@ void drawSoloOverlays(uint32_t now) {
 
 }  // namespace
 
-void begin(const registry::GameEntry& entry) {
+static void resetPlay() {
     debug::releaseControls();
     display::setPortrait(false);
-    g_entry = &entry;
-    g_gi = arcade::gameCreate(*entry.info);
     g_stage = Stage::Lobby;
     g_scoped = g_trackingB = false;
-    g_cal = entry.info->needsJoystick ? Calibration::Prompt : Calibration::Off;
+    g_cal = Calibration::Off;
+    g_randomSearching = g_randomSoloPending = false;
+    g_noEligibleSince = 0;
     g_beginMs = millis();
     g_closedAtMs = 0;
     g_playingSinceMs = 0;
@@ -340,11 +363,33 @@ void begin(const registry::GameEntry& entry) {
     g_jumpSkip = 0;
     g_stickLostMs = 0;
     g_radioOk = false;
+}
+
+static void load(const registry::GameEntry& entry) {
+    g_entry = &entry;
+    g_gi = arcade::gameCreate(*entry.info);
+    g_cal = entry.info->gyroScope ? Calibration::Prompt : Calibration::Off;
     offline_trace::record("lobby", entry.info->wireId);
-    if (entry.info->needsJoystick) {
+    if (entry.info->gyroScope) {
         const float gain = settings::aimGain();
         input::beginLook(0.33f * gain, gain);
     }
+}
+
+static arcade::IGame* loadRandomGame(uint16_t key) {
+    for (int i = 0; i < registry::count(); ++i) {
+        const auto& entry = registry::get(i);
+        if (net::gameKey(*entry.info) != key) continue;
+        joystick::setPower(entry.info->needsJoystick);
+        load(entry);
+        return g_gi.game;
+    }
+    return nullptr;
+}
+
+void begin(const registry::GameEntry& entry) {
+    resetPlay();
+    load(entry);
     if (!g_gi.game) {
         offline_trace::record("game_alloc_fail");
         return;
@@ -357,6 +402,17 @@ void begin(const registry::GameEntry& entry) {
     }
 }
 
+void beginRandom() {
+    resetPlay();
+    g_randomSearching = true;
+    joystick::setPower(true);
+    g_radioOk = radio::beginGame();
+    offline_trace::record("radio", g_radioOk);
+    if (g_radioOk) {
+        g_session.beginRandom(&radio::transport(), esp_random(), millis(), esp_random, loadRandomGame);
+    }
+}
+
 void end() {
     offline_trace::record("play_end");
     debug::releaseControls();
@@ -366,13 +422,55 @@ void end() {
     radio::endGame();
     g_entry = nullptr;
     g_radioOk = false;
+    g_randomSearching = g_randomSoloPending = false;
     arcade::gameDestroy(g_gi);
     display::setPortrait(false);
 }
 
+static bool updateRandom(uint32_t now) {
+    if (input::aPressed() || debug::aPress()) return true;
+    if (!joystick::ok() && now - g_beginMs < kRandomStickProbeMs) {
+        g_randomSoloPending |= input::bPressed() || debug::bPress();
+        return false;
+    }
+
+    uint16_t keys[net::kRandomCapacity];
+    size_t count = 0;
+    for (int i = 0; i < registry::count() && count < net::kRandomCapacity; ++i) {
+        const auto& info = *registry::get(i).info;
+        if (!info.needsJoystick || joystick::ok()) keys[count++] = net::gameKey(info);
+    }
+    if (g_radioOk) {
+        g_session.setRandomPool(keys, count);
+        pumpRadio(now);
+        if (g_session.status() != net::Status::Searching) {
+            if (!g_gi.game) return true;
+            g_randomSearching = g_randomSoloPending = false;
+            enterOnline();
+            return false;
+        }
+        g_session.update(now, {});
+    }
+    if (!g_randomSoloPending && !input::bPressed() && !debug::bPress()) return false;
+    g_randomSoloPending = false;
+    if (!count) {
+        g_noEligibleSince = now;
+        sound::playUi(sound::Ui::Denied);
+        return false;
+    }
+    g_randomSearching = false;
+    if (g_radioOk) radio::endGame();
+    g_radioOk = false;
+    if (!loadRandomGame(keys[net::randomIndex(count, esp_random)])) return true;
+    if (g_cal == Calibration::Off) startSolo();
+    else g_randomSoloPending = true;
+    return false;
+}
+
 bool update(float dt) {
-    if (!g_gi.game) return true;  // out of memory: back to the launcher
     const uint32_t now = millis();
+    if (g_randomSearching) return updateRandom(now);
+    if (!g_gi.game) return true;  // out of memory: back to the launcher
     // A game that needs the joystick cannot go on without it: say so, tell the opponent, and go back.
     if (g_entry->info->needsJoystick && !joystick::ok()) {
         if (g_stickLostMs == 0) {
@@ -399,6 +497,10 @@ bool update(float dt) {
         // existing matchmaking handshake only after their local pose is ready.
         if (g_cal != Calibration::Off) {
             updateCalibration(bPress);
+            if (g_randomSoloPending && g_cal == Calibration::Off && !aPress) {
+                g_randomSoloPending = false;
+                startSolo();
+            }
             return aPress;
         }
         pumpRadio(now);
@@ -426,10 +528,10 @@ bool update(float dt) {
         return true;
     }
     bool blockControls = g_cal != Calibration::Off;
-    if (g_entry->info->needsJoystick) {
+    if (g_entry->info->gyroScope) {
         const bool playing = g_stage == Stage::Solo || g_session.status() == net::Status::Playing;
         if (blockControls) {
-            updateCalibration(false);
+            updateCalibration(bPress);
         } else if (!playing || g_exitAsk || askWasOpen || game().phase() != arcade::MatchPhase::Playing) {
             g_trackingB = false;
         } else if (bPress) {
@@ -462,6 +564,7 @@ bool update(float dt) {
         aPress = false;
     }
     li.again = aPress;
+    li.ready = g_cal == Calibration::Off;
 
     if (g_stage == Stage::Solo) {
         if (g_radioOk) {
@@ -478,7 +581,7 @@ bool update(float dt) {
                 g_joinUntilMs = 0;
             }
         }
-        if (g_entry->info->portrait && aPress && g_joinUntilMs == 0 && game().phase()==arcade::MatchPhase::MatchEnd && !g_exitAsk) {
+        if (aPress && g_joinUntilMs == 0 && game().phase()==arcade::MatchPhase::MatchEnd && !g_exitAsk) {
             startSolo();
             return false;
         }
@@ -496,7 +599,7 @@ bool update(float dt) {
     const net::Status st = g_session.status();
     if (st == net::Status::Countdown) {
         const int digit = static_cast<int>(g_session.countdownSec() + 0.99f);
-        if (digit != g_lastDigit && digit > 0) sound::playUi(sound::Ui::Move);
+        if (digit != g_lastDigit && digit > 0 && digit <= 3) sound::playUi(sound::Ui::Move);
         g_lastDigit = digit;
     }
     if (st == net::Status::Playing && g_lastStatus != net::Status::Playing && g_lastStatus != net::Status::LinkLost) {
@@ -520,9 +623,10 @@ bool update(float dt) {
 }
 
 #ifdef __ANDROID__
-const char* gameName() { return g_entry ? g_entry->name : ""; }
+const char* gameName() { return g_randomSearching ? "RANDOM" : g_entry ? g_entry->name : ""; }
 int rttMs() { return g_radioOk && g_stage == Stage::Online ? g_session.rttMs() : -1; }
 const char* stateText() {
+    if (g_randomSearching) return "Searching";
     if (!g_entry) return "Menu";
     if (g_stage == Stage::Lobby) return "Lobby";
     if (g_stage == Stage::Solo) return "Solo";
@@ -537,6 +641,10 @@ bool needsJoystick() { return g_entry && g_entry->info->needsJoystick; }
 #endif
 
 void draw() {
+    if (g_randomSearching) {
+        drawLobby();
+        return;
+    }
     if (!g_gi.game) return;
     const uint32_t now = millis();
     arcade::DrawCtx ctx;
@@ -555,6 +663,9 @@ void draw() {
         game().draw(0, ctx);
         drawSoloOverlays(now);
     } else {
+        const net::Status st=g_session.status();
+        if (st==net::Status::Ready) ctx.countdownLeft=3.f+game().gridPreviewSeconds();
+        if (st==net::Status::Countdown) ctx.countdownLeft=std::max(.01f,g_session.countdownSec());
         game().draw(g_session.localIndex(), ctx);
         drawOnlineOverlays(now);
     }
